@@ -21,14 +21,9 @@
 
 <div class="body">
   <main>
-    <div class="section-head">
-      <h2>Participants <span id="feedCount" class="muted"></span></h2>
-      <span class="muted small">Each participant is published as an NDI source. Red border = on air (receiver connected).</span>
-    </div>
     <div id="grid" class="grid"></div>
     <div id="empty" class="empty">
       <div class="empty-title" id="emptyTitle">Not in a meeting</div>
-      <div class="muted" id="emptyText">Enter a Meet link above and press Join.</div>
     </div>
   </main>
 
@@ -52,7 +47,7 @@
     <section class="card">
       <details>
         <summary><h2>Settings</h2></summary>
-        <label>Bot account name (its own tile is never published) <input id="s_botName" placeholder="auto-detected" /></label>
+        <label>Bot account name <input id="s_botName" placeholder="auto-detected" /></label>
         <label>NDI name prefix <input id="s_ndiPrefix" /></label>
         <label>NDI groups <input id="s_ndiGroups" placeholder="(default)" /></label>
         <span class="row2">

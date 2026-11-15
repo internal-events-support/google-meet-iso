@@ -125,7 +125,6 @@ function renderFeeds(feeds: FeedState[]): void {
     t.root.classList.toggle('disabled', !f.enabled);
     if (document.activeElement !== t.toggle) t.toggle.checked = f.enabled;
   });
-  $('feedCount').textContent = feeds.length ? `(${feeds.length})` : '';
 }
 
 // ---------------- phase / header ----------------
@@ -157,24 +156,23 @@ function renderState(s: MeetState): void {
   renderFeeds(s.feeds);
   const empty = $('empty');
   empty.hidden = s.feeds.length > 0;
-  const [t, d] =
+  $('emptyTitle').textContent =
     s.phase === 'in-call'
-      ? ['Waiting for participants…', 'Participants with their video tile in the meeting appear here automatically.']
+      ? 'Waiting for participants'
       : s.phase === 'waiting'
-        ? ['Waiting to be admitted', 'Ask a host in the meeting to admit the bot.']
+        ? 'Waiting to be admitted'
         : s.phase === 'signed-out'
-          ? ['Sign in required', 'Click “Sign in to Google” and sign in with the bot account.']
+          ? 'Sign in required'
           : s.phase === 'denied'
-            ? ['Could not join', s.phaseDetail || 'The meeting refused the bot.']
-            : ['Not in a meeting', 'Enter a Meet link above and press Join.'];
-  $('emptyTitle').textContent = t;
-  $('emptyText').textContent = d;
+            ? 'Could not join'
+            : 'Not in a meeting';
 
   // Bot output
   const bc = s.botCam;
   $('botCamStatus').textContent =
     bc.source.type === 'none' ? 'No camera source' : `${bc.status}${bc.width ? ` · ${bc.width}×${bc.height} · ${bc.fps}fps` : ''}`;
-  $('micActive').textContent = s.micActive ? `Mic: ${s.micActive}` : settings?.micLabel ? 'Mic opens when the bot joins' : '';
+  // Only surface mic problems; the select already shows the chosen device.
+  $('micActive').textContent = s.micActive.startsWith('error') ? `Mic ${s.micActive}` : '';
   setToggle($<HTMLButtonElement>('camToggle'), 'Camera', s.camOn, s.phase === 'in-call' || s.phase === 'green-room');
   setToggle($<HTMLButtonElement>('micToggle'), 'Mic', s.micOn, s.phase === 'in-call' || s.phase === 'green-room');
 }
