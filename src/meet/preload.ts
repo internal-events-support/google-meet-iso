@@ -190,7 +190,10 @@ function tick(): void {
         if (feed.published && feed.state().connections === 0) feed.publish(ndiNameFor(feed));
       }
       feed.bindTile(t.el);
-      if (feed.enabled && !feed.published) feed.publish(ndiNameFor(feed));
+      // Meet renders names a moment after the tile; until then displayName is the device-id
+      // fallback ("143"). Don't publish a junk NDI name that gets renamed a second later.
+      const placeholder = !t.hasName && performance.now() - feed.createdAt < 3000;
+      if (feed.enabled && !feed.published && !placeholder) feed.publish(ndiNameFor(feed));
       if (!feed.enabled && feed.published) feed.unpublish();
     }
   }

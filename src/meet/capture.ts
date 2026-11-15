@@ -40,6 +40,7 @@ export class FeedCapture {
 
   tile: HTMLElement | null = null;
   lastSeen = performance.now();
+  readonly createdAt = performance.now();
 
   private sender: NativeSender | null = null;
   private video: RVFCVideo | null = null;

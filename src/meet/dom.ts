@@ -9,6 +9,8 @@ export interface TileInfo {
   displayName: string;
   isSelf: boolean;
   isScreen: boolean;
+  /** False when displayName is only the participant-id fallback (name not rendered yet). */
+  hasName: boolean;
   el: HTMLElement;
 }
 
@@ -142,7 +144,7 @@ export function findTiles(): TileInfo[] {
       const er = existing.el.getBoundingClientRect();
       if (er.width * er.height >= r.width * r.height) continue;
     }
-    out.set(key, { key, participantId, displayName, isSelf, isScreen, el });
+    out.set(key, { key, participantId, displayName, isSelf, isScreen, hasName: !!rawName, el });
   }
   return Array.from(out.values());
 }
