@@ -7,7 +7,6 @@ import { button, h, icon, popup, type OptList } from '../kit';
 import { api, bindPreview, inCall, on, refreshNdi, run, setSettings, store } from '../store';
 
 const VERSION = __APP_VERSION__;
-let meetWindowVisible = false;
 
 // ---------------------------------------------------------------------------
 // MeetingButton (80×80 rounded tile + caption)
@@ -130,10 +129,6 @@ export function mountMeeting(host: HTMLElement): void {
 
   // ---- MeetingPreviewAndControls
   const status = h('div.mt-status');
-  const hideBtn = button('Show Meet Window', async () => {
-    meetWindowVisible = await api.setMeetWindowVisible(!meetWindowVisible);
-    render();
-  }, 'mt-small');
   const settingsBtn = button(h('span.mt-btn-inner', icon('gear'), 'Open Meet Settings'), () => void api.openWindow('settings', 'inMeeting'), 'mt-small');
 
   const img = h('img', { alt: '' }) as HTMLImageElement;
@@ -188,7 +183,7 @@ export function mountMeeting(host: HTMLElement): void {
   const row = (label: HTMLElement | string, ...ctl: HTMLElement[]) => h('div.mt-row', typeof label === 'string' ? h('span.mt-row-label', label) : label, ...ctl);
   const panel = h('div.mt-panel',
     status,
-    h('div.mt-panel-btns', hideBtn, settingsBtn),
+    h('div.mt-panel-btns', settingsBtn),
     preview,
     row('Input Source', inputSource.el),
     row(sourceLabel, source.el, refresh),
@@ -212,7 +207,6 @@ export function mountMeeting(host: HTMLElement): void {
     status.className = 'mt-status ' + (live ? 'in' : joining ? 'joining' : 'out');
     newBtn.disabled = live || joining;
     joinBtn.disabled = live || joining;
-    hideBtn.textContent = meetWindowVisible ? 'Hide Meet Window' : 'Show Meet Window';
 
     const types: OptList = [
       { value: 'device', label: 'Webcam' },
