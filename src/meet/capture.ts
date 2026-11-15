@@ -11,7 +11,7 @@ import { Thumbnailer } from './camsource';
 
 export interface NativeSender {
   sendVideo(data: ArrayBuffer | Uint8Array, w: number, h: number, fmt: string, stride?: number): boolean;
-  stats(): { connections: number; slate: boolean; dropped: number; sent: number; width: number; height: number };
+  stats(): { connections: number; program: boolean; preview: boolean; slate: boolean; dropped: number; sent: number; width: number; height: number };
   destroy(): void;
 }
 
@@ -290,6 +290,8 @@ export class FeedCapture {
       height: this.lastH,
       fps: this.frameTimes.length,
       connections: st?.connections ?? 0,
+      program: st?.program ?? false,
+      preview: st?.preview ?? false,
       slate: st?.slate ?? true,
       dropped: st?.dropped ?? 0,
       copyMs: Math.round(this.copyMs * 10) / 10,

@@ -119,9 +119,13 @@ function renderFeeds(feeds: FeedState[]): void {
     t.overlay.textContent = st.overlay;
     t.overlay.hidden = !st.overlay;
     t.kind.hidden = f.kind !== 'screen';
-    t.air.hidden = !(f.connections > 0);
-    t.air.textContent = f.connections > 1 ? `ON AIR ×${f.connections}` : 'ON AIR';
-    t.root.classList.toggle('onair', f.connections > 0);
+    // Tally from downstream switchers; plain receivers (monitors) only show "Connected".
+    const tally = f.program ? 'program' : f.preview ? 'preview' : f.connections > 0 ? 'connected' : '';
+    t.air.hidden = !tally;
+    t.air.textContent = tally === 'program' ? 'ON AIR' : tally === 'preview' ? 'PREVIEW' : 'Connected';
+    t.air.className = `badge air ${tally}`;
+    t.root.classList.toggle('onair', tally === 'program');
+    t.root.classList.toggle('onpreview', tally === 'preview');
     t.root.classList.toggle('disabled', !f.enabled);
     if (document.activeElement !== t.toggle) t.toggle.checked = f.enabled;
   });

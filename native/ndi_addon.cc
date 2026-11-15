@@ -223,6 +223,11 @@ class Sender : public Napi::ObjectWrap<Sender> {
     o.Set("width", lastW_.load());
     o.Set("height", lastH_.load());
     o.Set("connections", send_ ? g_ndi->send_get_no_connections(send_, 0) : 0);
+    // Tally from downstream switchers (vMix/OBS/TriCaster...): is this source on program/preview?
+    NDIlib_tally_t tally{};
+    if (send_) g_ndi->send_get_tally(send_, &tally, 0);
+    o.Set("program", tally.on_program);
+    o.Set("preview", tally.on_preview);
     return o;
   }
 
@@ -443,6 +448,7 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
     return DefineClass(env, "Receiver", {
       InstanceMethod("read", &Receiver::Read),
       InstanceMethod("stats", &Receiver::Stats),
+      InstanceMethod("setTally", &Receiver::SetTally),
       InstanceMethod("destroy", &Receiver::Destroy),
     });
   }
@@ -518,6 +524,15 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
     o.Set("height", h_);
     o.Set("connected", recv_ ? g_ndi->recv_get_no_connections(recv_) > 0 : false);
     return o;
+  }
+  // setTally(onProgram, onPreview): report tally upstream like a switcher would.
+  Napi::Value SetTally(const Napi::CallbackInfo& info) {
+    if (!recv_) return info.Env().Undefined();
+    NDIlib_tally_t t{};
+    t.on_program = info.Length() > 0 && info[0].ToBoolean();
+    t.on_preview = info.Length() > 1 && info[1].ToBoolean();
+    g_ndi->recv_set_tally(recv_, &t);
+    return info.Env().Undefined();
   }
   Napi::Value Destroy(const Napi::CallbackInfo& info) {
     Shutdown();

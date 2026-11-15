@@ -77,7 +77,11 @@ export interface FeedState {
   width: number;
   height: number;
   fps: number;
+  /** Raw NDI connection count (one receiver usually opens 2 — don't show as a viewer count). */
   connections: number;
+  /** Downstream tally: source is on a switcher's program / preview bus. */
+  program: boolean;
+  preview: boolean;
   slate: boolean;
   dropped: number;
   /** Average ms for VideoFrame readback (diagnostics). */

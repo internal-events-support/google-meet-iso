@@ -59,7 +59,11 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: v
 .tile .media .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; background: rgba(0,0,0,.55); }
 .tile .badge { position: absolute; top: 8px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: rgba(0,0,0,.65); }
 .tile .badge.res { right: 8px; font-family: Consolas, monospace; font-weight: 400; }
-.tile .badge.air { left: 8px; background: var(--tally); color: #fff; }
+.tile .badge.air { left: 8px; color: #fff; }
+.tile .badge.air.program { background: var(--tally); }
+.tile .badge.air.preview { background: #16a34a; }
+.tile .badge.air.connected { background: rgba(0,0,0,.65); color: var(--muted); font-weight: 500; }
+.tile.onpreview { border-color: #16a34a; box-shadow: 0 0 0 1px #16a34a; }
 .tile .badge.kind { left: 8px; background: rgba(59,130,246,.85); }
 .tile .badge.air + .badge.kind { left: 80px; }
 .tile .meta { padding: 8px 10px; display: flex; align-items: center; gap: 10px; }
