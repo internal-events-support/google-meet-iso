@@ -29,6 +29,16 @@ function cleanName(s: string | null | undefined): string {
   return (s ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** Material/Google Symbols ligature text such as "frame_person", "more_vert", "mic_off". */
+const ICON_LIGATURE_RE = /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/;
+
+function isIconElement(el: Element): boolean {
+  const cls = typeof el.className === 'string' ? el.className : '';
+  if (/google-symbols|material-icons|material-symbols|icon/i.test(cls)) return true;
+  if (el.getAttribute('aria-hidden') === 'true' && ICON_LIGATURE_RE.test(cleanName(el.textContent))) return true;
+  return !!el.closest('i, [class*="google-symbols"], [class*="material-symbols"], [class*="material-icons"]');
+}
+
 function nameFromTile(tile: HTMLElement): string {
   // 1. The bot's own tile carries data-self-name.
   const self = tile.querySelector<HTMLElement>('[data-self-name]');
@@ -37,9 +47,12 @@ function nameFromTile(tile: HTMLElement): string {
     if (n) return n;
   }
   // 2. Names are rendered with translate="no" / .notranslate so Chrome won't translate them.
+  //    Meet's icon-font ligatures (e.g. "frame_person", "mic_off") use the same markers, so skip
+  //    icon elements and snake_case/lowercase single tokens.
   for (const el of Array.from(tile.querySelectorAll<HTMLElement>('.notranslate, [translate="no"]'))) {
+    if (isIconElement(el)) continue;
     const n = cleanName(el.textContent);
-    if (n && n.length <= 80) return n;
+    if (n && n.length <= 80 && !ICON_LIGATURE_RE.test(n)) return n;
   }
   // 3. Fall back to aria labels / tooltips on the tile.
   const labelled = tile.getAttribute('aria-label') || tile.querySelector('[aria-label]')?.getAttribute('aria-label');
