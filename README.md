@@ -1,47 +1,57 @@
 # GMeet ISO
 
 Zoom-ISO-style isolated feeds for Google Meet: every participant (and every screen share)
-becomes its own **NDI source** on the network, e.g. `MACHINE (GMEET - Alice Anderson)`.
+becomes its own **NDI source**, e.g. `MACHINE (GMEET - Alice Anderson)`. The Meet client
+runs hidden; the operator only ever sees the GMeet ISO control app.
+
+## What the operator sees
+
+- **Participant grid**: a live preview per participant / screen share, with NDI source name,
+  resolution, fps, live / camera-off / left status, a red **ON AIR** border when a receiver
+  is connected, and a per-feed publish toggle.
+- **Bot output**: what the bot sends into the meeting:
+  - **Camera source**: any NDI source on the network, or any local webcam (incl. virtual
+    cams like OBS/vMix). It can be switched live mid-call, and a preview is shown.
+  - **Microphone**: any local audio input, also switchable live.
+  - Camera / Mic toggles that drive Meet's own buttons.
+- Meeting status: signed out / ready / joining / waiting to be admitted / in call /
+  denied / ended. Google sign-in opens in a small dedicated window.
 
 ## How it works
 
 ```
- ┌──────────────── Electron ────────────────┐
- │ Control window      Meet window          │
- │ (settings, feeds)   meet.google.com      │
- │        ▲            signed-in bot acct   │
- │        │ IPC        ┌─ preload (isolated world, Node) ─┐
- │        └────────────┤ dom.ts     find tiles + names    │
- │                     │ capture.ts tile <video> →        │
- │                     │            WebCodecs VideoFrame  │
- │                     │            → copyTo(I420/NV12/   │
- │                     │              BGRA)               │
- │                     │ native addon (in-process) ───────┼──► NDI sources
- │                     └──────────────────────────────────┘
- └──────────────────────────────────────────┘
+Control window (UI)  ◄── IPC: state, JPEG previews, devices ──┐
+                                                               │
+Hidden Meet client (offscreen BrowserWindow, never shown)      │
+ ├─ main world:  media shim (src/meet/inject.ts)               │
+ │     getUserMedia → virtual "GMeet ISO Camera" = canvas.captureStream()
+ │                    virtual "GMeet ISO Mic"    = WebAudio dest ← chosen input device
+ └─ isolated world: preload (Node + native addon) ─────────────┘
+       dom.ts       tiles, names, join phase, cam/mic toggles
+       capture.ts   tile <video> track → MediaStreamTrackProcessor → VideoFrame
+                    → copyTo(I420/NV12/BGRA) → NDI Sender (one per participant)
+       camsource.ts NDI Receiver / webcam → paints the virtual-camera canvas
 ```
 
-- **No official API.** The Meet Media API is closed to new signups, caps you at 3 video
-  streams, and is being shut down on 2027‑01‑15. So the app runs a real Meet web client,
-  signed in with a dedicated Google account.
-- **Feeds follow tiles, not WebRTC tracks.** Meet's SFU multiplexes participants onto a
-  fixed set of "virtual" streams that get reassigned as people speak. Binding each feed to a
-  participant tile (`data-participant-id`) keeps the right person on the right source.
-- **Native addon** (`native/ndi_addon.cc`, N‑API): dynamically loads the installed NDI 6
-  runtime, one worker thread per sender, latest‑frame‑wins (never blocks the page). After
-  1 s with no frames (camera off, tile gone) it sends a black slate, so sources stay
-  stable for your switcher.
-- Camera/mic permissions are denied for the Meet session, so the bot never sends video
-  or audio.
-- When a participant leaves, their source holds black for *grace* seconds (default 15)
-  and is then removed.
+- **No official API.** The Meet Media API is closed to new signups, caps video at 3
+  streams, and shuts down on 2027‑01‑15. So the app runs the real Meet web client, signed
+  in with a dedicated Google account.
+- **Offscreen rendering.** The Meet page is rendered offscreen (`document.visibilityState`
+  is still `visible`, so Meet doesn't throttle). Frames are read straight from each tile's
+  MediaStreamTrack, so capture doesn't depend on the paint rate.
+- **Feeds follow tiles, not tracks.** Meet's SFU remaps a fixed set of virtual streams
+  between participants. Binding to the tile (`data-participant-id`) keeps the right person
+  on the right source.
+- **Native addon** (`native/ndi_addon.cc`, N‑API, dynamically loads the NDI 6 runtime):
+  - `Sender`: worker thread per source, latest-frame-wins, black slate after 1 s without
+    frames.
+  - `Receiver`: BGRA frames for the bot camera.
+  - `Finder`: source discovery.
 
 ## Requirements
 
-- Windows 10/11 x64 (macOS/Linux should work but are untested)
-- Node 22, Visual Studio 2022 Build Tools (C++)
-- NDI 6 Runtime (runs the sources) and NDI 6 SDK (headers for building). Set `NDI_SDK_DIR`
-  to the SDK folder.
+- Windows 10/11 x64, Node 22, Visual Studio 2022 Build Tools (C++)
+- NDI 6 Runtime (and NDI 6 SDK headers to build; set `NDI_SDK_DIR`)
 
 ## Run
 
@@ -51,35 +61,44 @@ npm run build        # native addon + TypeScript
 npm start
 ```
 
-1. Click **Google sign-in** and sign in with the bot account. The session is saved
-   (`persist:meet` partition).
-2. Paste a Meet link or code and click **Join**. "Join now" is clicked automatically
-   (toggle in settings).
-3. In the Meet window, choose **⋮ → Change layout → Tiled** and raise the max tiles.
-   **Only tiles rendered on screen can be captured**, and bigger tiles get more resolution
-   from Meet.
-4. Pull the `GMEET - …` sources into vMix / OBS / TriCaster / Studio Monitor.
+1. Click **Sign in to Google** (only shown when signed out) and sign in with the bot account.
+2. Paste a Meet link and click **Join**. Camera/mic prompts and "Join now" are handled
+   automatically. If the meeting needs admitting, a host must let the bot in.
+3. Pick the bot's **Camera source** and **Microphone** on the right.
+4. Pull the `GMEET - …` sources into vMix / OBS / TriCaster.
+
+Test meeting: `https://meet.google.com/ioe-pjbh-yjs`.
 
 ## Testing without a meeting
 
 ```bash
-npm run mock          # loads static/mock-meet.html (fake Meet DOM with live canvas video)
-npm run verify:ndi    # in another terminal: discovers GMEET sources, receives one frame each
+npm run mock          # fake Meet DOM (static/mock-meet.html) in the hidden window
+npm run verify:ndi    # discovers GMEET sources and receives one frame from each
 ```
 
-The mock covers: three live feeds at different resolutions, a screen share, the bot's own
-tile (excluded), a camera-off participant (black slate), and a participant who leaves at
-20 s (removed after the grace period).
+## Dev / automation commands
+
+With the app running, launch a second instance with `--cmd=`. Output goes to `%APPDATA%/gmeet-iso/`:
+
+| command | effect |
+|---|---|
+| `--cmd=join:<url>` / `--cmd=leave` | join / leave |
+| `--cmd=snap` / `--cmd=snap-ui` | screenshot of hidden Meet page / control UI |
+| `--cmd=dump` | Meet DOM diagnostics → `meet-dom-*.txt` |
+| `--cmd=eval:<js>` | run JS in the Meet main world → `eval-result.txt` |
+| `--cmd=set:<json>` | patch settings |
+
+The app also writes `state.json` (live state) and `devices.json` there.
 
 ## Known limits / TODO
 
-- **Meet DOM selectors are heuristics** (`src/meet/dom.ts`), and they haven't been run
-  against a live Meet yet. If feeds aren't detected, press **Dump Meet DOM** in a real call
-  (the output is also saved to the userData folder) and adjust `dom.ts`.
-- Resolution is whatever Meet sends to that tile: usually ≤720p for cameras, higher for
-  screen share. Output resolution follows the source; there's no fixed 1080p canvas yet.
-- No audio yet. Meet's web client only receives the 3 loudest speakers, so true per-person
-  audio isn't possible. A mixed program-audio feed is the next step.
-- Google may block sign-in from the embedded browser. The app sends a plain Chrome user
-  agent, which normally works.
+- Meet DOM heuristics live in `src/meet/dom.ts`. Joining, waiting-room detection and the
+  camera/mic toggles are validated on live Meet. Participant-tile detection is still only
+  validated against the mock until the first admitted call.
+- Only tiles Meet renders can be captured. Meet's layout (Auto/Tiled, tile count) isn't
+  automated yet.
+- Camera ISO resolution is whatever Meet sends (usually ≤720p); the bot's own camera is
+  sent at 1280×720.
+- No NDI audio out yet. Meet's web client only receives the 3 loudest speakers, so true
+  per-person audio isn't possible; a mixed program-audio feed is the next step.
 - No installer yet (electron-builder with `asarUnpack` for `build/Release/*.node`).

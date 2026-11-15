@@ -64,7 +64,47 @@ let ndi: NativeWithReceiver | null = null;
 let botCam: BotCamera | null = null;
 const botThumb = new Thumbnailer(320);
 let autoJoinAt = 0;
-let greenRoomPrepared = '';
+/**
+ * Per meeting, make Meet's cam/mic toggles match the operator's config. Clicks right as the
+ * green room renders (or in the same tick as Join) can be swallowed, so we verify on later
+ * ticks and retry a few times.
+ */
+const deviceSync = {
+  path: '',
+  done: { camera: false, microphone: false },
+  attempts: { camera: 0, microphone: 0 },
+  lastClick: { camera: 0, microphone: 0 },
+  startedAt: 0,
+};
+function syncDevices(): boolean {
+  if (deviceSync.path !== location.pathname) {
+    deviceSync.path = location.pathname;
+    deviceSync.done = { camera: false, microphone: false };
+    deviceSync.attempts = { camera: 0, microphone: 0 };
+    deviceSync.lastClick = { camera: 0, microphone: 0 };
+    deviceSync.startedAt = Date.now();
+  }
+  const want = { camera: settings.camera.type !== 'none', microphone: !!settings.micLabel };
+  for (const kind of ['camera', 'microphone'] as const) {
+    if (deviceSync.done[kind]) continue;
+    const cur = kind === 'camera' ? cameraOn() : micOn();
+    if (cur === null) continue;
+    if (cur === want[kind]) {
+      deviceSync.done[kind] = true;
+      log(`${kind} ${want[kind] ? 'on' : 'off'} in Meet`);
+    } else if (Date.now() - deviceSync.lastClick[kind] > 1500) {
+      if (deviceSync.attempts[kind]++ >= 5) {
+        deviceSync.done[kind] = true;
+        log(`could not set ${kind} ${want[kind] ? 'on' : 'off'} in Meet`);
+      } else {
+        setDevice(kind, want[kind]);
+        deviceSync.lastClick[kind] = Date.now();
+      }
+    }
+  }
+  // Ready to join once both are settled (or after 8 s regardless).
+  return (deviceSync.done.camera && deviceSync.done.microphone) || Date.now() - deviceSync.startedAt > 8000;
+}
 let lastDialogDismiss = 0;
 
 function ndiNameFor(feed: FeedCapture): string {
@@ -99,13 +139,9 @@ function tick(): void {
     lastDialogDismiss = Date.now();
     log('Dismissed camera/mic prompt');
   }
-  if (phase === 'green-room') {
-    // Before joining, make Meet's cam/mic toggles match what the operator configured.
-    if (greenRoomPrepared !== location.pathname) {
-      greenRoomPrepared = location.pathname;
-      setDevice('camera', settings.camera.type !== 'none');
-      setDevice('microphone', !!settings.micLabel);
-    }
+  let devicesReady = true;
+  if (phase === 'green-room' || phase === 'waiting' || phase === 'in-call') devicesReady = syncDevices();
+  if (phase === 'green-room' && devicesReady) {
     if (settings.autoJoin && Date.now() - autoJoinAt > 8000 && tryAutoJoin()) {
       autoJoinAt = Date.now();
       log('Clicked join');
