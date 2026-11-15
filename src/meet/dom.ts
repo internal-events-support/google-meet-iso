@@ -407,6 +407,7 @@ export async function pinTile(tile: HTMLElement): Promise<boolean> {
 
 /** Post a message to everyone via the chat panel, then close the panel again. */
 export async function sendChat(text: string): Promise<boolean> {
+  noteSentChat(text);
   const toggle = buttonByLabel(/^chat with everyone/i);
   let opened = false;
   let box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Send a message"]');
@@ -433,35 +434,210 @@ export async function sendChat(text: string): Promise<boolean> {
   return true;
 }
 
-/** Names of people asking to join, as shown in Meet's admit prompt (best effort). */
+// ---------------------------------------------------------------------------
+// Chat history (validated live, Nov 2026): Meet keeps the chat transcript mounted in
+// an aria-live="polite" container even while the side panel shows People, so we can
+// read it without opening the chat panel. Each message is a div[data-message-id]
+// (the Pin button carries the same attribute) inside a sender group
+// (div[jsname="Ypafjf"]) whose header holds the sender name (omitted for our own
+// messages) and an HH:MM time (div[jsname="biJjHb"]). Body: [jsname="dTKtvb"].
+// ---------------------------------------------------------------------------
+const chatLog = new Map<string, import('../shared/types').ChatMessage>();
+const sentByBot: string[] = [];
+const TIME_RE = /^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/i;
+
+/** Remember text the bot sent so it is flagged self even if Meet shows a sender name. */
+export function noteSentChat(text: string): void {
+  sentByBot.push(cleanName(text));
+  if (sentByBot.length > 50) sentByBot.shift();
+}
+
+function hhmmToEpoch(hhmm: string): number {
+  const m = hhmm.match(/(\d{1,2})[:.](\d{2})\s?([AP]M)?/i);
+  if (!m) return Date.now();
+  let h = Number(m[1]);
+  if (m[3]) h = (h % 12) + (/p/i.test(m[3]) ? 12 : 0);
+  const d = new Date();
+  d.setHours(h, Number(m[2]), 0, 0);
+  if (d.getTime() - Date.now() > 3600_000) d.setDate(d.getDate() - 1); // shown time is from yesterday
+  return d.getTime();
+}
+
+/** Scrape chat messages currently in the DOM and merge them into the rolling log (last 200). */
+export function scrapeChat(selfName = ''): import('../shared/types').ChatMessage[] {
+  const msgs = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).filter(
+    (el) => el.tagName !== 'BUTTON' && el.getAttribute('role') !== 'button' && !el.parentElement?.closest('[data-message-id]'),
+  );
+  for (const el of msgs) {
+    const id = el.getAttribute('data-message-id') || '';
+    if (!id || chatLog.has(id)) continue;
+    const body = el.querySelector<HTMLElement>('[jsname="dTKtvb"]');
+    let text = body?.innerText ?? body?.textContent ?? '';
+    if (!body) {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('button, [role="button"], [role="tooltip"]').forEach((b) => b.remove());
+      text = clone.textContent ?? '';
+    }
+    text = text.trim();
+    if (!text) continue;
+    const group = el.closest<HTMLElement>('[jsname="Ypafjf"]') ?? el.parentElement?.parentElement ?? el;
+    const timeEl = group.querySelector<HTMLElement>('[jsname="biJjHb"]');
+    let timeText = cleanName(timeEl?.textContent);
+    // Header = the group's text before the first message, minus the time.
+    let from = '';
+    const header = timeEl?.parentElement ?? null;
+    if (header) {
+      for (const n of Array.from(header.querySelectorAll<HTMLElement>('div, span'))) {
+        const t = cleanName(n.textContent);
+        if (!t || n.children.length) continue;
+        if (TIME_RE.test(t)) timeText ||= t;
+        else if (!from) from = t;
+      }
+    }
+    const fromLc = from.toLowerCase();
+    const self = !from || fromLc === 'you' || (!!selfName && fromLc === selfName.toLowerCase()) || sentByBot.includes(cleanName(text));
+    chatLog.set(id, { id, from: self && !from ? 'You' : from, text, time: hhmmToEpoch(timeText), self });
+  }
+  while (chatLog.size > 200) chatLog.delete(chatLog.keys().next().value as string);
+  return Array.from(chatLog.values());
+}
+
+// ---------------------------------------------------------------------------
+// Waiting room. Meet shows join requests either as a popup/toast ("X wants to join",
+// buttons Admit / View / Deny entry) or, when the People panel is open, as a
+// "Waiting to join" / "Waiting to be admitted" section of rows with Admit / Deny buttons.
+// ---------------------------------------------------------------------------
+const WAIT_SECTION_RE = /waiting to (join|be admitted)|asking to join|lobby/i;
+
+function btnText(b: HTMLElement): string {
+  return cleanName(b.getAttribute('aria-label') || b.innerText || b.textContent);
+}
+
+/** Rows of the People panel's waiting section: each has its own Admit/Deny buttons. */
+function waitingRows(): { name: string; row: HTMLElement }[] {
+  const out: { name: string; row: HTMLElement }[] = [];
+  const seen = new Set<HTMLElement>();
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+    if (!/^admit\b(?! all)/i.test(btnText(b)) || !isVisible(b)) continue;
+    // Smallest ancestor that is a list item / row holding this one Admit button.
+    let row: HTMLElement | null = b.closest<HTMLElement>('[role="listitem"]');
+    if (!row) {
+      let p = b.parentElement;
+      while (p && p !== document.body) {
+        if (Array.from(p.querySelectorAll('button, [role="button"]')).filter((x) => /^admit\b(?! all)/i.test(btnText(x as HTMLElement))).length > 1) break;
+        row = p;
+        if (cleanName(p.innerText).replace(/admit|deny( entry)?|view|remove/gi, '').trim().length > 1) break;
+        p = p.parentElement;
+      }
+    }
+    if (!row || seen.has(row)) continue;
+    seen.add(row);
+    // Name: aria-label "Admit <name>" or row text without button labels / prompt text.
+    const lab = btnText(b).match(/^admit\s+(.+)$/i)?.[1];
+    let name = lab ?? '';
+    if (!name) {
+      const clone = row.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('button, [role="button"], [aria-hidden="true"], i, [role="tooltip"]').forEach((x) => x.remove());
+      const t = cleanName(clone.innerText || clone.textContent);
+      name = t.match(/^(.{1,80}?)\s+(?:wants|asks|is asking) to join/i)?.[1] ?? t.split(/\n/)[0];
+    }
+    name = cleanName(name);
+    if (name && !WAIT_SECTION_RE.test(name)) out.push({ name, row });
+  }
+  return out;
+}
+
+/** Names of people asking to join (People-panel waiting section + admit popups). */
 export function waitingRequests(): string[] {
-  const out = new Set<string>();
-  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [aria-live]'))) {
+  const out = new Set<string>(waitingRows().map((r) => r.name));
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [aria-live], [role="alert"]'))) {
     const t = cleanName(el.innerText);
     const m = t.match(/^(.{1,80}?) (?:wants|asks|is asking) to join/i);
     if (m) out.add(m[1]);
     const many = t.match(/(\d+) (?:people|others) want to join/i);
-    if (many) out.add(`${many[1]} people`);
+    if (many && !out.size) out.add(`${many[1]} people`);
   }
   return Array.from(out);
 }
 
-/** Click Meet's Admit / Admit all (who = undefined or 'all'). Returns clicks made. */
+function matchRow(who: string): HTMLElement | null {
+  const w = who.toLowerCase();
+  const rows = waitingRows();
+  return (rows.find((r) => r.name.toLowerCase() === w) ?? rows.find((r) => r.name.toLowerCase().includes(w)))?.row ?? null;
+}
+
+/** Popup "N people want to join" → View: opens the People panel's waiting list. */
+async function expandWaitingList(): Promise<void> {
+  if (waitingRows().length) return;
+  const view = Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]')).find(
+    (b) => isVisible(b) && /^view( all)?$/i.test(btnText(b)) && /want(s)? to join/i.test(b.closest('[role="dialog"], [role="alertdialog"], [aria-live], [role="alert"]')?.textContent ?? ''),
+  );
+  if (view) {
+    view.click();
+    for (let i = 0; i < 10 && !waitingRows().length; i++) await sleep(150);
+  } else ensurePeoplePanel();
+}
+
+/** Click Meet's Admit / Admit all (who = undefined or 'all'), or Admit for one named person. */
 export async function admitWaiting(who?: string): Promise<number> {
-  let n = 0;
-  const all = buttonByLabel(/^admit all$/i);
-  if (all && (!who || who === 'all')) {
-    all.click();
-    await sleep(400);
-    buttonByLabel(/^admit all$/i)?.click(); // confirmation step
+  if (!who || who === 'all') {
+    const all = buttonByLabel(/^admit all/i);
+    if (all) {
+      all.click();
+      await sleep(400);
+      // Confirmation dialog repeats "Admit all".
+      const confirm = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button, [role="alertdialog"] button')).find((b) => /^admit all/i.test(btnText(b)) && isVisible(b));
+      confirm?.click();
+      return 1;
+    }
+    let n = 0;
+    for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+      if (!/^admit\b(?! all)/i.test(btnText(b)) || !isVisible(b)) continue;
+      b.click();
+      n++;
+      await sleep(250);
+    }
+    return n;
+  }
+  await expandWaitingList();
+  const row = matchRow(who);
+  let b = row ? Array.from(row.querySelectorAll<HTMLElement>('button, [role="button"]')).find((x) => /^admit\b(?! all)/i.test(btnText(x))) : undefined;
+  if (!b) {
+    // Single-person popup: "<who> wants to join" with an Admit button.
+    for (const d of Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [aria-live], [role="alert"]'))) {
+      if (!cleanName(d.innerText).toLowerCase().includes(who.toLowerCase())) continue;
+      b = Array.from(d.querySelectorAll<HTMLElement>('button, [role="button"]')).find((x) => /^admit$/i.test(btnText(x)) && isVisible(x));
+      if (b) break;
+    }
+  }
+  if (!b) return 0;
+  b.click();
+  return 1;
+}
+
+/** Click Deny / Deny entry for everyone (who = undefined/'all') or one named person. */
+export async function denyWaiting(who?: string): Promise<number> {
+  const DENY = /^(deny( entry)?|reject)\b/i;
+  if (who && who !== 'all') {
+    await expandWaitingList();
+    const row = matchRow(who);
+    let b = row ? Array.from(row.querySelectorAll<HTMLElement>('button, [role="button"]')).find((x) => DENY.test(btnText(x))) : undefined;
+    if (!b) {
+      for (const d of Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [aria-live], [role="alert"]'))) {
+        if (!cleanName(d.innerText).toLowerCase().includes(who.toLowerCase())) continue;
+        b = Array.from(d.querySelectorAll<HTMLElement>('button, [role="button"]')).find((x) => DENY.test(btnText(x)) && isVisible(x));
+        if (b) break;
+      }
+    }
+    if (!b) return 0;
+    b.click();
+    await sleep(300);
+    Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button, [role="alertdialog"] button')).find((x) => DENY.test(btnText(x)) && isVisible(x))?.click();
     return 1;
   }
+  let n = 0;
   for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
-    if (!/^admit$/i.test(cleanName(b.innerText || b.getAttribute('aria-label'))) || !isVisible(b)) continue;
-    if (who && who !== 'all') {
-      const ctx = cleanName(b.closest('[role="dialog"], [role="listitem"], [role="alertdialog"]')?.textContent ?? '');
-      if (!ctx.toLowerCase().includes(who.toLowerCase())) continue;
-    }
+    if (!DENY.test(btnText(b)) || !isVisible(b)) continue;
     b.click();
     n++;
     await sleep(250);
@@ -469,19 +645,10 @@ export async function admitWaiting(who?: string): Promise<number> {
   return n;
 }
 
-export async function denyWaiting(who?: string): Promise<number> {
-  let n = 0;
-  for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
-    if (!/^(deny entry|deny|remove)$/i.test(cleanName(b.innerText || b.getAttribute('aria-label'))) || !isVisible(b)) continue;
-    if (who && who !== 'all') {
-      const ctx = cleanName(b.closest('[role="dialog"], [role="listitem"], [role="alertdialog"]')?.textContent ?? '');
-      if (!ctx.toLowerCase().includes(who.toLowerCase())) continue;
-    }
-    b.click();
-    n++;
-    await sleep(250);
-  }
-  return n;
+/** Participant key (Meet participant id) of whoever is screen-sharing, or null. */
+export function presenterKey(): string | null {
+  const t = findTiles().find((x) => x.isScreen);
+  return t ? t.participantId : null;
 }
 
 // ---------------------------------------------------------------------------

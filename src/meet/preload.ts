@@ -46,6 +46,8 @@ import {
   tileMicMuted,
   tryAutoJoin,
   waitingRequests,
+  scrapeChat,
+  presenterKey,
   // [participants-agent] People-panel roster + host actions
   ensurePeoplePanel,
   lowerHand,
@@ -555,6 +557,8 @@ function report(): void {
     engine: settings.engine,
     activeSpeaker: speaker.activeSpeaker,
     waiting: phase === 'in-call' ? waitingRequests() : [],
+    chat: phase === 'in-call' ? scrapeChat(accountName()) : [],
+    presenter: phase === 'in-call' ? presenterKey() : null,
     rxMbps: Number(document.documentElement?.dataset.gmeetIsoRxMbps ?? 0),
     mixLevel: router?.mixPeak ?? 0,
     audioOutputMeters: deviceRouter?.meters(), // [audio-agent]

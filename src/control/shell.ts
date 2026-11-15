@@ -192,29 +192,6 @@ export function returnFeedBar(): HTMLElement {
   on('system', renderSys);
   on('state', renderSys);
 
-  // Chat with group
-  const chatBtn = h('button.btn', icon('chat'), h('span', 'Chat with group')) as HTMLButtonElement;
-  chatBtn.addEventListener('click', () => {
-    const tf = textField('', () => {}, { placeholder: 'Message everyone', cls: '' });
-    tf.el.style.width = '100%';
-    const send = async () => {
-      const text = tf.el.value.trim();
-      if (!text) return;
-      const ok = await run({ cmd: 'chat', text });
-      if (ok) close();
-    };
-    tf.el.addEventListener('keydown', (e) => e.key === 'Enter' && void send());
-    const body = h('div', { style: 'display:flex;flex-direction:column;gap:8px' }, h('div', { style: 'font-weight:600' }, 'Send to everyone'), tf.el, h('div', { style: 'display:flex;justify-content:flex-end' }, button('Send', () => void send(), 'primary')));
-    const close = popover(chatBtn, body, { width: 300, align: 'end' });
-    setTimeout(() => tf.el.focus(), 0);
-  });
-  const renderChat = () => {
-    const n = (store.state?.participants ?? []).filter((p) => p.kind === 'camera').length;
-    (chatBtn.lastChild as HTMLElement).textContent = `Chat with group (${n})`;
-    chatBtn.disabled = !inCall();
-  };
-  on('state', renderChat);
-
   const meetLink = h('span.link', 'meet.google.com');
   meetLink.addEventListener('click', () => store.state?.url && navigator.clipboard?.writeText(store.state.url));
 
@@ -224,10 +201,9 @@ export function returnFeedBar(): HTMLElement {
     h('div.rf-fields', field(inputSource.el, 'Input Source'), field(camera.el, 'Camera'), field(mic.el, 'Microphone'), field(speaker.el, 'Speaker')),
     h('div.rf-spacer'),
     h('div.rf-stats', h('div.col', cpu, ram), h('div.col', outs, net), perfBtn),
-    h('div.rf-right', chatBtn, h('div.version', meetLink, h('span', __APP_VERSION__))));
+    h('div.rf-right', h('div.version', meetLink, h('span', __APP_VERSION__))));
   render();
   renderSys();
-  renderChat();
   return bar;
 }
 

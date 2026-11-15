@@ -644,6 +644,8 @@ export interface Settings {
   previewFps: number;
   /** Last meeting link entered. */
   lastMeetUrl: string;
+  /** Recently joined meeting links, newest first (max 8). */
+  recentMeetUrls?: string[];
   /** Bot's Google account display name; used to exclude its own tile. Auto-learned. */
   botName: string;
   /** Output engine: disabled (no sources), standby (sources up, loss content), enabled (live). */
@@ -729,6 +731,7 @@ export const DEFAULT_SETTINGS: Settings = {
   micLabel: '',
   previewFps: 8,
   lastMeetUrl: '',
+  recentMeetUrls: [],
   botName: '',
   engine: 'enabled',
   outputs: defaultOutputs('GMEET'),
@@ -892,6 +895,10 @@ export interface MeetState {
   activeSpeaker: string | null;
   /** People asking to join (names), when visible to the bot. */
   waiting: string[];
+  /** Meeting chat history as seen by the bot (oldest first, last 200). */
+  chat?: ChatMessage[];
+  /** Participant key currently presenting a screen share, if any. */
+  presenter?: string | null;
   rxMbps: number;
   mixLevel: number;
   /** [audio-agent] Audio Outputs: per-device channel peaks (0..1) and the device's real channel count. */
@@ -1304,4 +1311,15 @@ export interface AudioOutputChannelConfig {
 export interface AudioOutputDeviceConfig {
   channels: AudioOutputChannelConfig[];
   collapsed?: boolean;
+}
+
+export interface ChatMessage {
+  /** Stable id (sender + time + index) for de-duplication. */
+  id: string;
+  from: string;
+  text: string;
+  /** Epoch ms (best effort; Meet shows only HH:MM). */
+  time: number;
+  /** Sent by the bot itself. */
+  self: boolean;
 }

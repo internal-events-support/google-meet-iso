@@ -372,6 +372,7 @@ async function joinMeeting(input: string): Promise<void> {
   const url = normalizeMeetUrl(input);
   if (!url) throw new Error('Enter a Meet link or code like abc-defg-hij');
   settings.lastMeetUrl = url;
+  settings.recentMeetUrls = [url, ...(settings.recentMeetUrls ?? []).filter((u) => u !== url)].slice(0, 8);
   saveSettings();
   log(`Joining ${url}`);
   await ensureMeetWindow().loadURL(url);
