@@ -141,9 +141,11 @@ const PHASE_TEXT: Record<MeetPhase, [string, string]> = {
 
 function renderState(s: MeetState): void {
   lastState = s;
+  // Only shown when NDI is broken.
   const ndi = $('ndiStatus');
-  ndi.textContent = s.ndi.ok ? `NDI ${(s.ndi.version ?? '').match(/\d+\.\d+\.\d+/)?.[0] ?? 'ok'}` : `NDI: ${s.ndi.error ?? 'unavailable'}`;
-  ndi.className = `pill ${s.ndi.ok ? 'ok' : 'bad'}`;
+  ndi.hidden = s.ndi.ok;
+  ndi.textContent = s.ndi.ok ? '' : `NDI unavailable: ${s.ndi.error ?? 'unknown error'}`;
+  ndi.className = 'pill bad';
 
   const [label, cls] = PHASE_TEXT[s.phase] ?? [s.phase, ''];
   $('phase').className = `phase ${cls}`;
