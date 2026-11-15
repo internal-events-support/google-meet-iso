@@ -298,6 +298,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
   content: ""; position: absolute; top: -7px; left: var(--arrow-x, 50%); width: 14px; height: 14px; margin-left: -7px;
   background: rgba(44,44,46,.97); border-left: 1px solid var(--border-strong); border-top: 1px solid var(--border-strong); transform: rotate(45deg);
 }
+.popover.above::before { top: auto; bottom: -7px; border: 0; border-right: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
 .popover.no-arrow::before { display: none; }
 .popover hr { border: 0; border-top: 1px solid var(--sep); margin: 10px 0; }
 /* context menu */

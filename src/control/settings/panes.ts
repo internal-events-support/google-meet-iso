@@ -47,9 +47,6 @@ export function generalPane(): HTMLElement {
 
   return h(
     'div.s-pane',
-    section('Capture settings', [
-      row('Auto-start capture engine on meeting join', tog(s.autoStartEngine, (v) => void setSettings({ autoStartEngine: v }))),
-    ]),
     section('Render settings', [
       row('Default format', pick(fmtOpts, String(fmtIdx), (v) => void setSettings({ defaultFormat: FORMAT_PRESETS[Number(v)].format }))),
     ]),

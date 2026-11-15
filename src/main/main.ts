@@ -128,6 +128,8 @@ function loadSettings(): void {
     settings = migrateSettings({});
   }
   settings.outputs = normalizeOutputs(settings.outputs, settings.ndiPrefix || 'GMEET');
+  // The UI has no capture on/off control, so always start with capture on (OSC/API can still change it).
+  settings.engine = 'enabled';
 }
 /** Set by "Clear Cache" so a pending save can't rewrite settings.json before quitting. */
 let doNotSave = false;
@@ -209,7 +211,7 @@ function openUiWindow(kind: WindowKind, arg = ''): void {
     icon: ICON,
     backgroundColor: '#1e1e1e',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#262626', symbolColor: '#e8e8e8', height: 38 },
+    titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 38 },
     webPreferences: { preload: path.join(__dirname, '..', 'control', 'preload.js'), contextIsolation: true, sandbox: true },
   });
   win.removeMenu();
@@ -257,7 +259,7 @@ function createControlWindow(): void {
     backgroundColor: '#1e1e1e',
     // ZoomISO-style unified toolbar: our top bar is the title bar; Windows caption buttons overlay it.
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#262626', symbolColor: '#e8e8e8', height: 48 },
+    titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 48 },
     webPreferences: {
       preload: path.join(__dirname, '..', 'control', 'preload.js'),
       contextIsolation: true,

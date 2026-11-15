@@ -19,21 +19,6 @@
 .topbar .right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .app-title { font-size: 14px; font-weight: 600; white-space: nowrap; }
 
-/* capture engine pill */
-.capture-pill {
-  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 4px 0 10px;
-  border-radius: var(--r-pill); background: rgba(255,255,255,.07); border: 1px solid var(--border);
-  font-weight: 500; white-space: nowrap; color: var(--text-2);
-}
-.capture-pill .ico { width: 14px; height: 14px; }
-.capture-pill.on { background: var(--green-pill); border-color: transparent; color: #fff; }
-.capture-pill.standby { background: #7a5410; border-color: transparent; color: #fff; }
-.capture-pill .switch { width: 40px; height: 24px; }
-.capture-pill .switch span { background: rgba(255,255,255,.18); border-radius: 12px; }
-.capture-pill .switch span::before { width: 20px; height: 20px; }
-.capture-pill .switch input:checked + span { background: rgba(255,255,255,.9); }
-.capture-pill .switch input:checked + span::before { background: var(--green-pill); transform: translateX(16px); }
-
 /* recording pill (running) */
 .rec-pill.running { background: var(--red-btn); border-color: transparent; color: #fff; }
 .rec-pill.running .ico { color: #fff; }

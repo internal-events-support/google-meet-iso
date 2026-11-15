@@ -325,7 +325,11 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { width
   let left = opts.align === 'start' ? r.left : opts.align === 'end' ? r.right - pw : r.left + r.width / 2 - pw / 2;
   left = Math.max(8, Math.min(window.innerWidth - pw - 8, left));
   pop.style.left = `${left}px`;
-  pop.style.top = `${r.bottom + 10}px`;
+  // Open below the anchor, or above it when it would run off the bottom (e.g. the bottom bar).
+  const ph = pop.offsetHeight;
+  const above = r.bottom + 10 + ph > window.innerHeight - 8 && r.top - 10 - ph >= 8;
+  pop.style.top = above ? `${r.top - 10 - ph}px` : `${r.bottom + 10}px`;
+  pop.classList.toggle('above', above);
   pop.style.setProperty('--arrow-x', `${r.left + r.width / 2 - left}px`);
   const close = () => {
     layer.remove();

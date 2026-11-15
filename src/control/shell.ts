@@ -41,20 +41,6 @@ export function currentTab(): TabId {
 
 // ---------------------------------------------------------------------------
 function topBar(): HTMLElement {
-  // Capture engine pill (Off ↔ Live; Standby is reachable via OSC/API and shows amber).
-  const pillLabel = h('span', 'Capture Disabled');
-  const sw = toggle(false, (v) => void run({ cmd: 'engine', state: v ? 'enabled' : 'disabled' }));
-  const pill = h('div.capture-pill', icon('gearFill'), pillLabel, sw.el);
-  const renderPill = () => {
-    const e = store.settings.engine;
-    pill.classList.toggle('on', e === 'enabled');
-    pill.classList.toggle('standby', e === 'standby');
-    pillLabel.textContent = e === 'enabled' ? 'Capture Enabled' : e === 'standby' ? 'Capture Standby' : 'Capture Disabled';
-    sw.set(e !== 'disabled');
-  };
-  on('settings', renderPill);
-  renderPill();
-
   nav = segmented(TABS.map((t) => ({ value: t.id, label: t.label })), current, (v) => showTab(v as TabId));
 
   // Recording button: "Configure Recording" ↔ red running pill with timer.
@@ -94,7 +80,7 @@ function topBar(): HTMLElement {
   renderAvatar();
 
   return h('header.topbar',
-    h('div.left', pill, h('span.app-title', 'GMeet ISO')),
+    h('div.left', h('span.app-title', 'GMeet ISO')),
     h('div.center', nav.el),
     h('div.right', recBtn, settingsBtn, avatar));
 }
