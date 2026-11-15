@@ -15,6 +15,67 @@ export function installMediaShim(): void {
   if (w.__gmeetIsoShim) return;
   w.__gmeetIsoShim = true;
 
+  // ----- RTC observation -----
+  // Keep references to Meet's peer connections so we can read, per receiver, which
+  // participant (CSRC) is currently carried by each virtual stream and their audio level.
+  // Published as JSON on <html data-gmeet-iso-rtc> for the isolated-world preload.
+  const pcs = new Set<RTCPeerConnection>();
+  const OrigPC = window.RTCPeerConnection;
+  if (OrigPC) {
+    const Hooked = function (this: unknown, ...args: ConstructorParameters<typeof RTCPeerConnection>) {
+      const pc = new OrigPC(...args);
+      pcs.add(pc);
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'closed') pcs.delete(pc);
+      });
+      return pc;
+    } as unknown as typeof RTCPeerConnection;
+    Hooked.prototype = OrigPC.prototype;
+    Object.setPrototypeOf(Hooked, OrigPC);
+    window.RTCPeerConnection = Hooked;
+    (window as unknown as Record<string, unknown>).webkitRTCPeerConnection = Hooked;
+  }
+  const latest = (list: RTCRtpContributingSource[]) =>
+    list.length ? list.reduce((a, b) => (b.timestamp > a.timestamp ? b : a)) : null;
+  setInterval(() => {
+    const out: { k: string; t: string; c: number | null; s: number | null; l: number; age: number }[] = [];
+    const now = performance.timeOrigin + performance.now();
+    for (const pc of pcs) {
+      if (pc.connectionState === 'closed') continue;
+      for (const r of pc.getReceivers()) {
+        if (!r.track) continue;
+        const c = latest(r.getContributingSources());
+        const s = latest(r.getSynchronizationSources());
+        out.push({
+          k: r.track.kind,
+          t: r.track.id,
+          c: c ? c.source : null,
+          s: s ? s.source : null,
+          l: Math.round(((c?.audioLevel ?? s?.audioLevel ?? 0) as number) * 1000) / 1000,
+          age: c ? Math.round(now - c.timestamp) : -1,
+        });
+      }
+    }
+    document.documentElement?.setAttribute('data-gmeet-iso-rtc', JSON.stringify(out));
+  }, 200);
+  // Inbound bitrate for the status bar.
+  let lastBytes = 0;
+  let lastAt = 0;
+  setInterval(async () => {
+    let bytes = 0;
+    for (const pc of pcs) {
+      if (pc.connectionState === 'closed') continue;
+      const stats = await pc.getStats();
+      stats.forEach((st: { type: string; bytesReceived?: number }) => {
+        if (st.type === 'transport' && st.bytesReceived) bytes += st.bytesReceived;
+      });
+    }
+    const now = performance.now();
+    if (lastAt) document.documentElement?.setAttribute('data-gmeet-iso-rx-mbps', (((bytes - lastBytes) * 8) / ((now - lastAt) * 1000)).toFixed(2));
+    lastBytes = bytes;
+    lastAt = now;
+  }, 2000);
+
   const md = navigator.mediaDevices;
   if (!md) return;
   const origGUM = md.getUserMedia.bind(md);

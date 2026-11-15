@@ -301,3 +301,185 @@ export function dumpDom(): string {
   }
   return lines.join('\n');
 }
+
+
+// ---------------------------------------------------------------------------
+// Meet controls (validated against live Meet, Nov 2026 UI)
+// ---------------------------------------------------------------------------
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function buttonByLabel(re: RegExp, root: ParentNode = document): HTMLElement | null {
+  for (const b of Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], [role="menuitem"]'))) {
+    const label = cleanName(b.getAttribute('aria-label') || b.innerText);
+    if (re.test(label) && isVisible(b)) return b;
+  }
+  return null;
+}
+
+/** Set an <input type=range> the way a user would, so Meet's handlers fire. */
+function setRange(input: HTMLInputElement, value: number): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, String(value));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/**
+ * More options → Adjust view → "Tiled (legacy)" + max tiles slider.
+ * Tiled renders every participant (up to the tile limit) at equal size, which is what we
+ * need: Meet only sends video for rendered tiles and sizes each stream to its tile.
+ */
+export async function applyTiledLayout(maxTiles: number): Promise<string> {
+  const more = buttonByLabel(/^more options$/i);
+  if (!more) return 'more-options button not found';
+  more.click();
+  await sleep(600);
+  const item = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((e) => /adjust view|change layout/i.test(e.innerText));
+  if (!item) {
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    return 'adjust-view item not found';
+  }
+  item.click();
+  await sleep(900);
+  const dlg = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).find((d) => /adjust view|change layout/i.test(d.innerText));
+  if (!dlg) return 'adjust-view dialog not found';
+  let result = '';
+  // Radio whose label contains "Tiled".
+  for (const radio of Array.from(dlg.querySelectorAll<HTMLInputElement>('input[type="radio"]'))) {
+    const label = cleanName((radio.closest('label') ?? radio.parentElement?.parentElement ?? radio.parentElement)?.textContent);
+    if (/tiled/i.test(label)) {
+      if (!radio.checked) radio.click();
+      result += 'tiled ';
+      break;
+    }
+  }
+  // Slider steps map to tile counts (6, 9, 16, 25, 36, 49).
+  const slider = dlg.querySelector<HTMLInputElement>('input[type="range"]');
+  if (slider) {
+    const steps = [6, 9, 16, 25, 36, 49];
+    const max = Number(slider.max || steps.length - 1);
+    let idx = steps.findIndex((n) => n >= maxTiles);
+    if (idx < 0) idx = steps.length - 1;
+    idx = Math.min(idx, max);
+    if (Number(slider.value) !== idx) setRange(slider, idx);
+    result += `tiles=${steps[idx] ?? idx}`;
+  }
+  await sleep(300);
+  buttonByLabel(/^close/i, dlg)?.click();
+  return result.trim() || 'dialog found but no controls matched';
+}
+
+/** Mic state from a tile: Meet shows "You can't unmute someone else" when muted. */
+export function tileMicMuted(tile: HTMLElement): boolean | null {
+  for (const b of Array.from(tile.querySelectorAll<HTMLElement>('[aria-label]'))) {
+    const l = b.getAttribute('aria-label') ?? '';
+    if (/can't unmute|cannot unmute|is muted/i.test(l)) return true;
+    if (/^mute .*microphone/i.test(l)) return false;
+  }
+  const ligatures = Array.from(tile.querySelectorAll('i, [aria-hidden="true"]')).map((e) => cleanName(e.textContent));
+  if (ligatures.includes('mic_off')) return true;
+  return null;
+}
+
+export function tileHandRaised(tile: HTMLElement): boolean {
+  if (tile.querySelector('[aria-label*="raised" i][aria-label*="hand" i]')) return true;
+  return Array.from(tile.querySelectorAll('i, [aria-hidden="true"]')).some((e) => /^(back_hand|front_hand|pan_tool)$/.test(cleanName(e.textContent)));
+}
+
+/** Host action: mute a participant's mic (confirms Meet's dialog). */
+export async function muteParticipant(tile: HTMLElement): Promise<boolean> {
+  const b = Array.from(tile.querySelectorAll<HTMLElement>('[aria-label]')).find((e) => /^mute .*microphone/i.test(e.getAttribute('aria-label') ?? ''));
+  if (!b) return false;
+  b.click();
+  await sleep(500);
+  const confirm = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button, [role="alertdialog"] button')).find((x) => /^mute$/i.test(cleanName(x.innerText)));
+  confirm?.click();
+  return true;
+}
+
+export async function pinTile(tile: HTMLElement): Promise<boolean> {
+  const b = Array.from(tile.querySelectorAll<HTMLElement>('[aria-label]')).find((e) => /^pin .* to your main screen/i.test(e.getAttribute('aria-label') ?? ''));
+  if (!b) return false;
+  b.click();
+  return true;
+}
+
+/** Post a message to everyone via the chat panel, then close the panel again. */
+export async function sendChat(text: string): Promise<boolean> {
+  const toggle = buttonByLabel(/^chat with everyone/i);
+  let opened = false;
+  let box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Send a message"]');
+  if (!box || !isVisible(box)) {
+    if (!toggle) return false;
+    toggle.click();
+    opened = true;
+    for (let i = 0; i < 20 && !(box && isVisible(box)); i++) {
+      await sleep(150);
+      box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Send a message"]');
+    }
+  }
+  if (!box) return false;
+  box.focus();
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  setter?.call(box, text);
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(150);
+  const send = Array.from(document.querySelectorAll<HTMLElement>('button[aria-label="Send a message"]')).find((b) => isVisible(b));
+  if (send && !(send as HTMLButtonElement).disabled) send.click();
+  else box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  await sleep(400);
+  if (opened) toggle?.click(); // restore the stage size
+  return true;
+}
+
+/** Names of people asking to join, as shown in Meet's admit prompt (best effort). */
+export function waitingRequests(): string[] {
+  const out = new Set<string>();
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [aria-live]'))) {
+    const t = cleanName(el.innerText);
+    const m = t.match(/^(.{1,80}?) (?:wants|asks|is asking) to join/i);
+    if (m) out.add(m[1]);
+    const many = t.match(/(\d+) (?:people|others) want to join/i);
+    if (many) out.add(`${many[1]} people`);
+  }
+  return Array.from(out);
+}
+
+/** Click Meet's Admit / Admit all (who = undefined or 'all'). Returns clicks made. */
+export async function admitWaiting(who?: string): Promise<number> {
+  let n = 0;
+  const all = buttonByLabel(/^admit all$/i);
+  if (all && (!who || who === 'all')) {
+    all.click();
+    await sleep(400);
+    buttonByLabel(/^admit all$/i)?.click(); // confirmation step
+    return 1;
+  }
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+    if (!/^admit$/i.test(cleanName(b.innerText || b.getAttribute('aria-label'))) || !isVisible(b)) continue;
+    if (who && who !== 'all') {
+      const ctx = cleanName(b.closest('[role="dialog"], [role="listitem"], [role="alertdialog"]')?.textContent ?? '');
+      if (!ctx.toLowerCase().includes(who.toLowerCase())) continue;
+    }
+    b.click();
+    n++;
+    await sleep(250);
+  }
+  return n;
+}
+
+export async function denyWaiting(who?: string): Promise<number> {
+  let n = 0;
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+    if (!/^(deny entry|deny|remove)$/i.test(cleanName(b.innerText || b.getAttribute('aria-label'))) || !isVisible(b)) continue;
+    if (who && who !== 'all') {
+      const ctx = cleanName(b.closest('[role="dialog"], [role="listitem"], [role="alertdialog"]')?.textContent ?? '');
+      if (!ctx.toLowerCase().includes(who.toLowerCase())) continue;
+    }
+    b.click();
+    n++;
+    await sleep(250);
+  }
+  return n;
+}

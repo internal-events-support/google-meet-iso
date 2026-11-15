@@ -1,37 +1,63 @@
 // Preload for the hidden Meet window. Runs in an isolated world on meet.google.com with
 // Node access (sandbox: false) so it can load the native NDI addon directly. The Meet page
 // itself never sees Node or the addon (contextIsolation: true).
+//
+// Orchestrates:
+//   sources  — one SourceTap per participant tile (camera / screen share)
+//   outputs  — ZoomISO-style slots (stable NDI sources) routed to sources by mode
+//   audio    — meeting mix + per-participant ISO audio into the slots
+//   speaker  — active speaker + CSRC→participant attribution
+//   control  — join flow, layout, host tools, bot camera/mic, commands from main
 
 import { contextBridge, ipcRenderer } from 'electron';
 import * as path from 'path';
-import { BOT_CAM_KEY, DEFAULT_SETTINGS, IPC, type DeviceLists, type MeetState, type Settings } from '../shared/types';
-import { BotCamera, getCamCanvas, Thumbnailer } from './camsource';
-import { FeedCapture, type NativeNdi } from './capture';
 import {
+  BOT_CAM_KEY,
+  DEFAULT_SETTINGS,
+  IPC,
+  type Command,
+  type DeviceLists,
+  type MeetState,
+  type OutputConfig,
+  type ParticipantState,
+  type Settings,
+} from '../shared/types';
+import { AudioRouter } from './audio';
+import { BotCamera, getCamCanvas, Thumbnailer } from './camsource';
+import {
+  accountName,
+  admitWaiting,
+  applyTiledLayout,
   cameraOn,
   clickLeave,
+  denyWaiting,
   dismissDeviceDialog,
   dumpDom,
   findTiles,
   inCall,
   meetingPhase,
   micOn,
-  accountName,
+  muteParticipant,
+  sendChat,
   setBotName,
   setDevice,
+  tileHandRaised,
+  tileMicMuted,
   tryAutoJoin,
+  waitingRequests,
 } from './dom';
 import { installMediaShim } from './inject';
-
-type NativeWithReceiver = NativeNdi & {
-  Receiver: ConstructorParameters<typeof BotCamera>[0];
-};
+import type { NativeNdi } from './native';
+import { OutputPipeline } from './outputs';
+import { defaultRecordDir } from './recorder';
+import { SourceTap } from './sources';
+import { SpeakerTracker } from './speaker';
 
 function log(line: string): void {
   ipcRenderer.send(IPC.meetLog, line);
 }
 
-function loadNdi(): { ndi: NativeWithReceiver | null; status: MeetState['ndi'] } {
+function loadNdi(): { ndi: NativeNdi | null; status: MeetState['ndi'] } {
   const candidates = [
     path.join(__dirname, '..', '..', 'build', 'Release', 'gmeet_iso_ndi.node'),
     // Packaged app: native modules are unpacked next to app.asar.
@@ -41,7 +67,7 @@ function loadNdi(): { ndi: NativeWithReceiver | null; status: MeetState['ndi'] }
   for (const p of candidates) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require(p) as NativeWithReceiver;
+      const mod = require(p) as NativeNdi;
       const st = mod.load();
       if (!st.ok) return { ndi: null, status: { ok: false, error: st.error } };
       log(`NDI loaded: ${st.version}`);
@@ -59,13 +85,20 @@ const isMeet = location.hostname === 'meet.google.com' || isMock;
 const isGoogle = isMeet || /(^|\.)google\.com$/.test(location.hostname);
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
-const feeds = new Map<string, FeedCapture>();
-const disabledKeys = new Set<string>();
 let ndiState: MeetState['ndi'] = { ok: false, error: 'not loaded' };
-let ndi: NativeWithReceiver | null = null;
+let ndi: NativeNdi | null = null;
 let botCam: BotCamera | null = null;
 const botThumb = new Thumbnailer(320);
+const sources = new Map<string, SourceTap>();
+const outputs = new Map<string, OutputPipeline>();
+const speaker = new SpeakerTracker();
+let router: AudioRouter | null = null;
+
+// ---------------------------------------------------------------------------
+// join flow helpers
+// ---------------------------------------------------------------------------
 let autoJoinAt = 0;
+let lastDialogDismiss = 0;
 /**
  * Per meeting, make Meet's cam/mic toggles match the operator's config. Clicks right as the
  * green room renders (or in the same tick as Join) can be swallowed, so we verify on later
@@ -104,115 +137,285 @@ function syncDevices(): boolean {
       }
     }
   }
-  // Ready to join once both are settled (or after 8 s regardless).
   return (deviceSync.done.camera && deviceSync.done.microphone) || Date.now() - deviceSync.startedAt > 8000;
 }
-let lastDialogDismiss = 0;
 
-function ndiNameFor(feed: FeedCapture): string {
-  const base = `${settings.ndiPrefix.trim() || 'GMEET'} - ${feed.displayName}`;
-  const suffix = feed.kind === 'screen' ? ' (Screen)' : '';
-  let name = `${base}${suffix}`.slice(0, 120);
-  // Disambiguate two participants with the same display name.
-  let n = 2;
-  const taken = new Set(
-    Array.from(feeds.values())
-      .filter((f) => f !== feed && f.ndiName)
-      .map((f) => f.ndiName),
-  );
-  while (taken.has(name)) name = `${base} #${n++}${suffix}`;
-  return name;
-}
+/** Once-per-meeting actions after entering the call. */
+const meetingOnce = { path: '', layout: '', notice: false, noticeTries: 0, noticeAt: 0, layoutAt: 0 };
 
+// ---------------------------------------------------------------------------
+// sources
+// ---------------------------------------------------------------------------
 function sendPreview(key: string, jpeg: ArrayBuffer): void {
   ipcRenderer.send(IPC.meetPreview, key, new Uint8Array(jpeg));
 }
 
-function applySettings(): void {
-  setBotName(settings.botName);
-  applyMediaSettings();
+function syncSources(live: boolean): void {
+  const seen = new Set<string>();
+  if (live) {
+    const tiles = findTiles();
+    speaker.observe(tiles.map((t) => ({ key: t.key, el: t.el })));
+    for (const t of tiles) {
+      if (t.isScreen && !settings.screenShare) continue;
+      seen.add(t.key);
+      let src = sources.get(t.key);
+      if (!src) {
+        src = new SourceTap(
+          { key: t.key, participantId: t.participantId, kind: t.isScreen ? 'screen' : 'camera', displayName: t.displayName },
+          log,
+          sendPreview,
+          () => 2,
+        );
+        sources.set(t.key, src);
+      }
+      if (t.hasName && !src.hasName) log(`Participant: ${t.displayName}${t.isScreen ? ' [screen]' : ''}${t.isSelf ? ' (bot)' : ''}`);
+      src.displayName = t.displayName;
+      src.hasName = t.hasName;
+      src.isSelf = t.isSelf;
+      src.muted = tileMicMuted(t.el);
+      src.handRaised = tileHandRaised(t.el);
+      src.bindTile(t.el);
+    }
+  }
+  const now = performance.now();
+  for (const [key, src] of sources) {
+    if (seen.has(key)) continue;
+    src.bindTile(null);
+    if (!live || now - src.lastSeen > settings.graceSeconds * 1000) {
+      if (src.hasName) log(`Participant left: ${src.displayName}`);
+      src.dispose();
+      sources.delete(key);
+    }
+  }
 }
 
-function applyMediaSettings(): void {
+/** Participants eligible for routing (named, not the bot unless allowed). */
+function eligible(kind: 'camera' | 'screen'): SourceTap[] {
+  return [...sources.values()]
+    .filter((s) => s.kind === kind && (s.hasName || performance.now() - s.createdAt > 3000) && (!s.isSelf || settings.includeSelf) && s.tile)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function findSourceFor(sel: { key: string; name: string } | null, kind?: 'camera' | 'screen'): SourceTap | null {
+  if (!sel) return null;
+  const direct = sources.get(sel.key);
+  if (direct && (!kind || direct.kind === kind)) return direct;
+  // Rejoined with a new device id: match by display name.
+  const byName = [...sources.values()].find((s) => s.displayName === sel.name && (!kind || s.kind === kind) && s.tile);
+  return byName ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// outputs
+// ---------------------------------------------------------------------------
+function syncOutputs(): void {
+  if (!ndi) return;
+  const wanted = new Set(settings.outputs.map((o) => o.id));
+  for (const [id, p] of outputs) {
+    if (!wanted.has(id)) {
+      p.dispose();
+      outputs.delete(id);
+    }
+  }
+  for (const cfg of settings.outputs) {
+    let p = outputs.get(cfg.id);
+    if (!p) {
+      p = new OutputPipeline(cfg, {
+        ndi,
+        groups: () => settings.ndiGroups,
+        previewFps: () => settings.previewFps,
+        recordDir: () => settings.recordDir || defaultRecordDir(),
+        log,
+        onPreview: sendPreview,
+      });
+      outputs.set(cfg.id, p);
+    } else {
+      p.setConfig(cfg);
+    }
+    p.setEngine(settings.engine);
+  }
+}
+
+/** Decide which source each output shows. */
+function routeOutputs(): void {
+  const cams = eligible('camera');
+  const screens = eligible('screen');
+  const claimed = new Set<string>();
+  const decided = new Map<string, SourceTap | null>();
+
+  // 1) explicit participant selections (these claim the participant from auto slots)
+  for (const cfg of settings.outputs) {
+    if (cfg.mode !== 'participant') continue;
+    let src = findSourceFor(cfg.selection, undefined);
+    if (src) claimed.add(src.key);
+    else if (cfg.failover === 'activeSpeaker' && speaker.activeSpeaker) src = sources.get(speaker.activeSpeaker) ?? null;
+    decided.set(cfg.id, src);
+  }
+  // 2) screen shares
+  for (const cfg of settings.outputs) {
+    if (cfg.mode !== 'screenshare') continue;
+    const chosen = findSourceFor(cfg.selection, 'screen') ?? screens[0] ?? null;
+    decided.set(cfg.id, chosen);
+  }
+  // 3) active speaker
+  for (const cfg of settings.outputs) {
+    if (cfg.mode !== 'activeSpeaker') continue;
+    const k = speaker.activeSpeaker;
+    decided.set(cfg.id, (k && sources.get(k)) || cams[0] || null);
+  }
+  // 4) auto: keep current assignment while valid, else take the next unclaimed participant
+  const autoCfgs = settings.outputs.filter((o) => o.mode === 'auto');
+  for (const cfg of autoCfgs) {
+    const cur = outputs.get(cfg.id)?.boundKey;
+    const src = cur ? sources.get(cur) : undefined;
+    if (src && src.tile && src.kind === 'camera' && !claimed.has(src.key) && cams.includes(src)) {
+      decided.set(cfg.id, src);
+      claimed.add(src.key);
+    }
+  }
+  for (const cfg of autoCfgs) {
+    if (decided.get(cfg.id)) continue;
+    const next = cams.find((s) => !claimed.has(s.key)) ?? null;
+    decided.set(cfg.id, next);
+    if (next) claimed.add(next.key);
+  }
+  for (const [id, src] of decided) {
+    const p = outputs.get(id);
+    if (!p) continue;
+    p.bind(src);
+  }
+}
+
+/** Route meeting audio into the outputs (called every ~10 ms by the router). */
+function onAudio(mix: Float32Array, perTrack: Map<string, Float32Array>, n: number): void {
+  for (const cfg of settings.outputs) {
+    if (cfg.audio === 'off') continue;
+    const p = outputs.get(cfg.id);
+    if (!p) continue;
+    let buf: Float32Array | null = null;
+    if (cfg.audio === 'mix' || cfg.mode === 'screenshare') buf = mix;
+    else {
+      const key = p.boundKey;
+      const base = key?.replace(/:screen$/, '') ?? null;
+      const track = base ? speaker.audioTrackFor(base) : null;
+      buf = track ? (perTrack.get(track) ?? null) : null;
+      // Single remote participant: their audio is the mix, attribution or not.
+      if (!buf && eligible('camera').length === 1 && key) buf = mix;
+      if (!buf) buf = new Float32Array(n * 2); // silence keeps the stream continuous
+    }
+    p.pushAudio(buf, 48000, 2, n);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tick
+// ---------------------------------------------------------------------------
+function applySettings(): void {
+  setBotName(settings.botName);
   const root = document.documentElement;
   if (root) root.dataset.gmeetIsoMic = settings.micLabel || '';
   void botCam?.setSource(settings.camera);
+  void router?.setMonitorDevice(settings.monitorDevice);
+  syncOutputs();
 }
 
-function tick(): void {
-  const { phase } = meetingPhase();
-
-  // Learn the bot's account name (shown on Meet's account button outside calls).
-  const acct = accountName();
-  if (acct && acct !== settings.botName) {
-    settings = { ...settings, botName: acct };
-    setBotName(acct);
-    ipcRenderer.send(IPC.meetBotName, acct);
-    log(`Bot account: ${acct}`);
+async function onceInCall(): Promise<void> {
+  if (meetingOnce.path !== location.pathname) {
+    meetingOnce.path = location.pathname;
+    meetingOnce.layout = '';
+    meetingOnce.notice = false;
+    meetingOnce.noticeTries = 0;
+    meetingOnce.noticeAt = 0;
+    meetingOnce.layoutAt = performance.now();
   }
-
-  if (settings.autoJoin && phase !== 'in-call' && Date.now() - lastDialogDismiss > 2000 && dismissDeviceDialog()) {
-    lastDialogDismiss = Date.now();
-    log('Dismissed camera/mic prompt');
+  const layoutKey = `${settings.autoLayout}:${settings.maxTiles}`;
+  if (settings.autoLayout && meetingOnce.layout !== layoutKey && performance.now() - meetingOnce.layoutAt > 2500) {
+    meetingOnce.layout = layoutKey;
+    const r = await applyTiledLayout(settings.maxTiles);
+    log(`Layout: ${r}`);
   }
-  let devicesReady = true;
-  if (phase === 'green-room' || phase === 'waiting' || phase === 'in-call') devicesReady = syncDevices();
-  if (phase === 'green-room' && devicesReady) {
-    if (settings.autoJoin && Date.now() - autoJoinAt > 8000 && tryAutoJoin()) {
+  // Chat isn't usable for a few seconds after joining: retry a few times.
+  const now = performance.now();
+  if (!meetingOnce.notice && settings.joinNotice.trim() && now - meetingOnce.layoutAt > 6000 && now - meetingOnce.noticeAt > 5000) {
+    meetingOnce.noticeAt = now;
+    const ok = await sendChat(settings.joinNotice.trim());
+    if (ok) log(`Posted notice: "${settings.joinNotice.trim()}"`);
+    if (ok || ++meetingOnce.noticeTries >= 4) meetingOnce.notice = true;
+    if (!ok && meetingOnce.notice) log('Could not post join notice');
+  }
+}
+
+let busy = false;
+async function tick(): Promise<void> {
+  if (busy) return;
+  busy = true;
+  try {
+    const { phase } = meetingPhase();
+    const acct = accountName();
+    if (acct && acct !== settings.botName) {
+      settings = { ...settings, botName: acct };
+      setBotName(acct);
+      ipcRenderer.send(IPC.meetBotName, acct);
+      log(`Bot account: ${acct}`);
+    }
+    if (settings.autoJoin && phase !== 'in-call' && Date.now() - lastDialogDismiss > 2000 && dismissDeviceDialog()) {
+      lastDialogDismiss = Date.now();
+      log('Dismissed camera/mic prompt');
+    }
+    let devicesReady = true;
+    if (phase === 'green-room' || phase === 'waiting' || phase === 'in-call') devicesReady = syncDevices();
+    if (phase === 'green-room' && devicesReady && settings.autoJoin && Date.now() - autoJoinAt > 8000 && tryAutoJoin()) {
       autoJoinAt = Date.now();
       log('Clicked join');
     }
-  }
 
-  const live = phase === 'in-call';
-  const seen = new Set<string>();
-  if (live && ndi) {
-    for (const t of findTiles()) {
-      if (t.isSelf && !settings.includeSelf) continue;
-      if (t.isScreen && !settings.screenShare) continue;
-      seen.add(t.key);
-      let feed = feeds.get(t.key);
-      if (!feed) {
-        feed = new FeedCapture(
-          ndi,
-          { key: t.key, participantId: t.participantId, kind: t.isScreen ? 'screen' : 'camera', displayName: t.displayName },
-          () => ({ maxFps: settings.maxFps, groups: settings.ndiGroups, previewFps: settings.previewFps }),
-          log,
-          sendPreview,
-        );
-        feed.enabled = !disabledKeys.has(t.key);
-        feeds.set(t.key, feed);
-        log(`Participant found: ${t.displayName} [${t.isScreen ? 'screen' : 'camera'}]`);
+    const live = phase === 'in-call';
+    syncSources(live);
+    speaker.readRtc();
+    speaker.update(eligible('camera').map((s) => s.key));
+    if (ndi) routeOutputs();
+    if (live) {
+      router?.sync();
+      await onceInCall();
+      if (settings.autoAdmit && waitingRequests().length) {
+        const n = await admitWaiting('all');
+        if (n) log('Auto-admitted waiting participant(s)');
       }
-      // Names sometimes render a beat after the tile; rename while nobody is connected.
-      if (t.displayName && t.displayName !== feed.displayName) {
-        feed.displayName = t.displayName;
-        if (feed.published && feed.state().connections === 0) feed.publish(ndiNameFor(feed));
-      }
-      feed.bindTile(t.el);
-      // Meet renders names a moment after the tile; until then displayName is the device-id
-      // fallback ("143"). Don't publish a junk NDI name that gets renamed a second later.
-      const placeholder = !t.hasName && performance.now() - feed.createdAt < 3000;
-      if (feed.enabled && !feed.published && !placeholder) feed.publish(ndiNameFor(feed));
-      if (!feed.enabled && feed.published) feed.unpublish();
     }
-  }
-
-  // Tiles that vanished: keep the source alive (black) for the grace period.
-  const now = performance.now();
-  for (const [key, feed] of feeds) {
-    if (seen.has(key)) continue;
-    feed.bindTile(null);
-    const excluded = feed.kind === 'screen' && !settings.screenShare;
-    if (!live || excluded || now - feed.lastSeen > settings.graceSeconds * 1000) {
-      log(`Participant gone: ${feed.displayName}`);
-      feed.dispose();
-      feeds.delete(key);
-    }
+  } finally {
+    busy = false;
   }
 }
 
 let inCallSince = 0;
+function participants(): ParticipantState[] {
+  const shownBy = new Map<string, string[]>();
+  for (const p of outputs.values()) {
+    const k = p.boundKey;
+    if (k) shownBy.set(k, [...(shownBy.get(k) ?? []), p.id]);
+  }
+  return [...sources.values()]
+    .filter((s) => s.hasName || s.tile)
+    .map((s) => {
+      const base = s.key.replace(/:screen$/, '');
+      return {
+        key: s.key,
+        participantId: s.participantId,
+        displayName: s.displayName,
+        kind: s.kind,
+        isSelf: s.isSelf,
+        hasVideo: s.live,
+        width: s.width,
+        height: s.height,
+        fps: s.fps(),
+        muted: s.muted,
+        handRaised: s.handRaised,
+        level: speaker.level(base),
+        speaking: speaker.speaking(base),
+        outputs: shownBy.get(s.key) ?? [],
+      };
+    });
+}
 
 function report(): void {
   const { phase, detail } = meetingPhase();
@@ -235,7 +438,14 @@ function report(): void {
     },
     micActive: document.documentElement?.dataset.gmeetIsoMicActive ?? '',
     ndi: ndiState,
-    feeds: Array.from(feeds.values()).map((f) => f.state()),
+    feeds: [],
+    participants: phase === 'in-call' ? participants() : [],
+    outputs: settings.outputs.map((c) => outputs.get(c.id)?.state()).filter((x): x is NonNullable<typeof x> => !!x),
+    engine: settings.engine,
+    activeSpeaker: speaker.activeSpeaker,
+    waiting: phase === 'in-call' ? waitingRequests() : [],
+    rxMbps: Number(document.documentElement?.dataset.gmeetIsoRxMbps ?? 0),
+    mixLevel: router?.mixPeak ?? 0,
     updatedAt: Date.now(),
   };
   ipcRenderer.send(IPC.meetState, state);
@@ -258,6 +468,7 @@ async function reportDevices(): Promise<void> {
     const lists: DeviceLists = {
       videoInputs: devs.filter((d) => d.kind === 'videoinput' && d.label).map((d) => d.label),
       audioInputs: devs.filter((d) => d.kind === 'audioinput' && d.label).map((d) => d.label),
+      audioOutputs: devs.filter((d) => d.kind === 'audiooutput' && d.label).map((d) => d.label),
     };
     ipcRenderer.send(IPC.meetDevices, lists);
   } catch (e) {
@@ -265,14 +476,49 @@ async function reportDevices(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// commands (runtime-only; config changes arrive as settings)
+// ---------------------------------------------------------------------------
+function sourceByRef(ref: string): SourceTap | null {
+  return sources.get(ref) ?? [...sources.values()].find((s) => s.displayName.toLowerCase() === ref.toLowerCase()) ?? null;
+}
+
+async function runCommand(c: Command): Promise<unknown> {
+  switch (c.cmd) {
+    case 'chat':
+      return sendChat(c.text);
+    case 'admit':
+      return admitWaiting(c.who);
+    case 'deny':
+      return denyWaiting(c.who);
+    case 'muteParticipant': {
+      const s = sourceByRef(c.participant);
+      return s?.tile ? muteParticipant(s.tile) : false;
+    }
+    case 'applyLayout':
+      return applyTiledLayout(settings.maxTiles);
+    case 'setCam':
+      return setDevice('camera', c.on);
+    case 'setMic':
+      return setDevice('microphone', c.on);
+    default:
+      return null;
+  }
+}
+
 function disposeAll(): void {
-  for (const f of feeds.values()) f.dispose();
-  feeds.clear();
+  for (const p of outputs.values()) p.dispose();
+  outputs.clear();
+  for (const s of sources.values()) s.dispose();
+  sources.clear();
+  router?.dispose();
   botCam?.dispose();
 }
 
+export type { OutputConfig };
+
 if (isMeet) {
-  // Replace getUserMedia/enumerateDevices in the page before Meet's scripts run.
+  // Replace getUserMedia/enumerateDevices and observe RTC before Meet's scripts run.
   try {
     contextBridge.executeInMainWorld({ func: installMediaShim });
   } catch (e) {
@@ -280,16 +526,17 @@ if (isMeet) {
   }
 
   ipcRenderer.on(IPC.meetSettings, (_e, s: Settings) => {
-    const prefixChanged = s.ndiPrefix !== settings.ndiPrefix || s.ndiGroups !== settings.ndiGroups;
     settings = s;
     applySettings();
-    if (prefixChanged) for (const f of feeds.values()) if (f.published) f.publish(ndiNameFor(f));
   });
-  ipcRenderer.on(IPC.meetFeedEnabled, (_e, key: string, enabled: boolean) => {
-    if (enabled) disabledKeys.delete(key);
-    else disabledKeys.add(key);
-    const f = feeds.get(key);
-    if (f) f.enabled = enabled;
+  ipcRenderer.on(IPC.meetCommand, async (_e, id: number, c: Command) => {
+    let result: unknown = null;
+    try {
+      result = await runCommand(c);
+    } catch (e) {
+      result = { error: (e as Error).message };
+    }
+    ipcRenderer.send(IPC.meetCommand, id, result);
   });
   ipcRenderer.on(IPC.meetSetCam, (_e, on: boolean) => setDevice('camera', on));
   ipcRenderer.on(IPC.meetSetMic, (_e, on: boolean) => setDevice('microphone', on));
@@ -314,19 +561,15 @@ if (isMeet) {
   window.addEventListener('DOMContentLoaded', () => {
     getCamCanvas();
     botCam = new BotCamera(ndi?.Receiver ?? null, log);
+    router = new AudioRouter(onAudio, log);
     void ipcRenderer.invoke(IPC.meetGetSettings).then((s: Settings) => {
       settings = s;
       applySettings();
     });
     window.setInterval(() => {
-      try {
-        tick();
-      } catch (e) {
-        log(`tick error: ${(e as Error).message}`);
-      }
-    }, 500);
-    window.setInterval(report, 1000);
-    // Bot camera preview for the control UI.
+      tick().catch((e) => log(`tick error: ${(e as Error).message}`));
+    }, 400);
+    window.setInterval(report, 500);
     window.setInterval(() => {
       const c = getCamCanvas();
       void botThumb.maybe(c, c.width, c.height, settings.previewFps).then((j) => j && sendPreview(BOT_CAM_KEY, j));
@@ -336,7 +579,7 @@ if (isMeet) {
   });
   window.addEventListener('pagehide', disposeAll);
 } else if (isGoogle) {
-  // accounts.google.com etc.: nothing to do, but report so the UI knows we're signed out.
+  // accounts.google.com etc.: report so the UI knows we're signed out.
   window.addEventListener('DOMContentLoaded', () => {
     window.setInterval(report, 1000);
   });

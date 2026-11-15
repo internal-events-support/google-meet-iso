@@ -12,7 +12,9 @@
 
 #include <napi.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -105,6 +107,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
   static Napi::Function Init(Napi::Env env) {
     return DefineClass(env, "Sender", {
       InstanceMethod("sendVideo", &Sender::SendVideo),
+      InstanceMethod("sendAudio", &Sender::SendAudio),
       InstanceMethod("connections", &Sender::Connections),
       InstanceMethod("stats", &Sender::Stats),
       InstanceMethod("destroy", &Sender::Destroy),
@@ -150,7 +153,29 @@ class Sender : public Napi::ObjectWrap<Sender> {
   ~Sender() override { Shutdown(); }
 
  private:
-  // sendVideo(data: ArrayBuffer | TypedArray, width, height, format: 'I420'|'NV12'|'BGRA'|..., stride?: number)
+  // sendAudio(planar: Float32Array (ch0 samples, ch1 samples, ...), sampleRate, channels, samplesPerChannel)
+  Napi::Value SendAudio(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!send_ || info.Length() < 4 || !info[0].IsTypedArray()) return Napi::Boolean::New(env, false);
+    auto ta = info[0].As<Napi::Float32Array>();
+    int sr = info[1].As<Napi::Number>().Int32Value();
+    int ch = info[2].As<Napi::Number>().Int32Value();
+    int ns = info[3].As<Napi::Number>().Int32Value();
+    if (ch <= 0 || ns <= 0 || ta.ElementLength() < static_cast<size_t>(ch) * ns) return Napi::Boolean::New(env, false);
+    NDIlib_audio_frame_v3_t a{};
+    a.sample_rate = sr;
+    a.no_channels = ch;
+    a.no_samples = ns;
+    a.timecode = NDIlib_send_timecode_synthesize;
+    a.FourCC = NDIlib_FourCC_audio_type_FLTP;
+    a.p_data = reinterpret_cast<uint8_t*>(ta.Data());
+    a.channel_stride_in_bytes = ns * 4;
+    g_ndi->send_send_audio_v3(send_, &a);  // NDI allows audio + video sends concurrently
+    return Napi::Boolean::New(env, true);
+  }
+
+  // sendVideo(data: ArrayBuffer | TypedArray, width, height, format: 'I420'|'NV12'|'BGRA'|..., stride?: number,
+  //           fpsN?: number, fpsD?: number)
   // For planar formats the buffer must be tightly packed planes (Y, then U, then V / UV)
   // with luma stride = `stride` (default: width) and chroma stride = stride/2 (I420) or stride (NV12).
   Napi::Value SendVideo(const Napi::CallbackInfo& info) {
@@ -201,6 +226,10 @@ class Sender : public Napi::ObjectWrap<Sender> {
       pending_.height = h;
       pending_.stride = stride;
       pending_.fourcc = fourcc;
+      if (info.Length() > 6 && info[5].IsNumber() && info[6].IsNumber()) {
+        fpsN_ = info[5].As<Napi::Number>().Int32Value();
+        fpsD_ = info[6].As<Napi::Number>().Int32Value();
+      }
       hasPending_ = true;
       received_++;
     }
@@ -262,8 +291,9 @@ class Sender : public Napi::ObjectWrap<Sender> {
     f.xres = w;
     f.yres = h;
     f.FourCC = fourcc;
-    f.frame_rate_N = 30000;
-    f.frame_rate_D = 1001;
+    const int fn = fpsN_.load(), fd = fpsD_.load();
+    f.frame_rate_N = fn > 0 ? fn : 30000;
+    f.frame_rate_D = fd > 0 ? fd : 1001;
     f.picture_aspect_ratio = 0.0f;  // square pixels
     f.frame_format_type = NDIlib_frame_format_type_progressive;
     f.timecode = NDIlib_send_timecode_synthesize;
@@ -296,7 +326,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
         lastH_ = work.height;
         slating_ = false;
         sent_++;
-      } else if (now - lastFrameAt_ > milliseconds(idleMs_) && now - lastSlate > milliseconds(200)) {
+      } else if (idleMs_ > 0 && now - lastFrameAt_ > milliseconds(idleMs_) && now - lastSlate > milliseconds(200)) {
         Emit(slate_.data(), slateW_, slateH_, slateW_ * 2, NDIlib_FourCC_video_type_UYVY);
         lastSlate = now;
         slating_ = true;
@@ -307,7 +337,8 @@ class Sender : public Napi::ObjectWrap<Sender> {
   std::string name_;
   std::string groups_;
   NDIlib_send_instance_t send_ = nullptr;
-  int idleMs_ = 1000;
+  int idleMs_ = 1000;  // <= 0 disables the automatic black slate (JS renders loss modes)
+  std::atomic<int> fpsN_{0}, fpsD_{0};
   int slateW_ = 1280;
   int slateH_ = 720;
   std::vector<uint8_t> slate_;
@@ -553,8 +584,54 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
   uint64_t seq_ = 0, readSeq_ = 0;
 };
 
+// receiveAudio(fullSourceName, timeoutMs = 5000): { sampleRate, channels, samples, peak } | null
+Napi::Value ReceiveAudio(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!LoadNdi()) { Napi::Error::New(env, g_loadError).ThrowAsJavaScriptException(); return env.Undefined(); }
+  std::string name = info[0].As<Napi::String>().Utf8Value();
+  uint32_t timeout = info.Length() > 1 && info[1].IsNumber() ? info[1].As<Napi::Number>().Uint32Value() : 5000;
+  NDIlib_source_t src{};
+  src.p_ndi_name = name.c_str();
+  NDIlib_recv_create_v3_t rc{};
+  rc.source_to_connect_to = src;
+  rc.color_format = NDIlib_recv_color_format_fastest;
+  rc.bandwidth = NDIlib_recv_bandwidth_audio_only;
+  NDIlib_recv_instance_t r = g_ndi->recv_create_v3(&rc);
+  if (!r) return env.Null();
+  Napi::Value result = env.Null();
+  double peak = 0;
+  int frames = 0, sr = 0, ch = 0, total = 0;
+  auto start = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(timeout)) {
+    NDIlib_audio_frame_v3_t a{};
+    auto t = g_ndi->recv_capture_v3(r, nullptr, &a, nullptr, 200);
+    if (t != NDIlib_frame_type_audio) continue;
+    sr = a.sample_rate; ch = a.no_channels; total += a.no_samples; frames++;
+    if (a.FourCC == NDIlib_FourCC_audio_type_FLTP) {
+      for (int c = 0; c < a.no_channels; c++) {
+        const float* p = reinterpret_cast<const float*>(a.p_data + static_cast<size_t>(c) * a.channel_stride_in_bytes);
+        for (int i = 0; i < a.no_samples; i++) peak = std::max(peak, static_cast<double>(std::abs(p[i])));
+      }
+    }
+    g_ndi->recv_free_audio_v3(r, &a);
+    if (frames >= 50) break;  // ~0.5 s of audio
+  }
+  if (frames) {
+    auto o = Napi::Object::New(env);
+    o.Set("sampleRate", sr);
+    o.Set("channels", ch);
+    o.Set("samples", total);
+    o.Set("frames", frames);
+    o.Set("peak", peak);
+    result = o;
+  }
+  g_ndi->recv_destroy(r);
+  return result;
+}
+
 Napi::Object InitModule(Napi::Env env, Napi::Object exports) {
   exports.Set("load", Napi::Function::New(env, Load));
+  exports.Set("receiveAudio", Napi::Function::New(env, ReceiveAudio));
   exports.Set("findSources", Napi::Function::New(env, FindSources));
   exports.Set("receiveFrame", Napi::Function::New(env, ReceiveFrame));
   exports.Set("Sender", Sender::Init(env));

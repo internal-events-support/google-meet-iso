@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>GMeet ISO Display</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+      canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+      #label { position: fixed; inset: 0; display: grid; place-items: center; color: #8a94a3; font: 500 20px "Segoe UI", sans-serif; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c" width="1280" height="720"></canvas>
+    <div id="label"></div>
+  </body>
+</html>
