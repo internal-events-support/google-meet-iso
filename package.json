@@ -6,12 +6,14 @@
   "scripts": {
     "build:native": "node-gyp rebuild",
     "build:ts": "tsc -p tsconfig.json",
-    "build": "npm run build:native && npm run build:ts",
-    "start": "npm run build:ts && electron .",
+    "build": "npm run build:native && npm run build:ts && npm run build:ui",
+    "start": "npm run build:ts && npm run build:ui && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "mock": "npm run build:ts && cross-env-shell GMEET_ISO_MOCK=1 electron .",
+    "mock": "npm run build:ts && npm run build:ui && cross-env-shell GMEET_ISO_MOCK=1 electron .",
     "verify:ndi": "node scripts/verify-ndi.js",
-    "icons": "electron scripts/build-icons.js"
+    "icons": "electron scripts/build-icons.js",
+    "build:ui": "node scripts/build-ui.js",
+    "watch:ui": "node scripts/build-ui.js --watch"
   },
   "license": "UNLICENSED",
   "type": "commonjs",
@@ -20,6 +22,7 @@
     "@types/ws": "^8.18.2",
     "cross-env": "^10.1.0",
     "electron": "^45.3.2",
+    "esbuild": "^0.25.12",
     "node-gyp": "^11.5.0",
     "typescript": "^7.0.2"
   },

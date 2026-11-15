@@ -16,6 +16,12 @@ const api: ControlApi = {
   command: (c: Command) => ipcRenderer.invoke('ctl:command', c),
   pickFile: (kind) => ipcRenderer.invoke('ctl:pickFile', kind),
   system: () => ipcRenderer.invoke('ctl:system'),
+  openWindow: (kind, arg) => ipcRenderer.invoke('ctl:openWindow', kind, arg),
+  logs: () => ipcRenderer.invoke('ctl:logs'),
+  perfHistory: () => ipcRenderer.invoke('ctl:perfHistory'),
+  perfControl: (action) => ipcRenderer.invoke('ctl:perfControl', action),
+  openPath: (kind) => ipcRenderer.invoke('ctl:openPath', kind),
+  setMeetWindowVisible: (v) => ipcRenderer.invoke('ctl:setMeetWindowVisible', v),
   onState: (cb: (s: MeetState) => void) => {
     ipcRenderer.on('ctl:state', (_e, s: MeetState) => cb(s));
   },

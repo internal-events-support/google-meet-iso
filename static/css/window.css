@@ -1,0 +1,6 @@
+/* Shared chrome for secondary windows (Settings / Output Effects / Performance Details). */
+body.window { display: flex; flex-direction: column; }
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; padding: 0 14px; background: var(--bar); -webkit-app-region: drag; border-bottom: 1px solid rgba(0,0,0,.45); }
+.titlebar .title { font-size: var(--fs); font-weight: 600; color: var(--text-2); }
+.titlebar button, .titlebar label, .titlebar input { -webkit-app-region: no-drag; }
+body.window #app { flex: 1; min-height: 0; display: flex; flex-direction: column; }

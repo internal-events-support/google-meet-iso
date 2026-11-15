@@ -15,8 +15,10 @@ import {
   type MeetState,
   type OutputConfig,
   type OutputMode,
+  type PerfSample,
   type Settings,
   type SystemStats,
+  type WindowKind,
 } from '../shared/types';
 import { ApiServer } from './api';
 import { applyNdiConfig } from './ndiconfig';
@@ -100,13 +102,84 @@ let lastDevices: DeviceLists = { videoInputs: [], audioInputs: [], audioOutputs:
 let lastState: MeetState | null = null;
 let quitting = false;
 
+/** Secondary UI windows (settings, effects, perf) — all share the control preload. */
+const uiWindows = new Map<WindowKind, BrowserWindow>();
+
+/** Send to every UI window (main control window + secondary windows). */
+function broadcast(channel: string, ...args: unknown[]): void {
+  controlWin?.webContents.send(channel, ...args);
+  for (const w of uiWindows.values()) if (!w.isDestroyed()) w.webContents.send(channel, ...args);
+}
+
 const logRing: string[] = [];
 function log(line: string): void {
   const stamped = `${new Date().toLocaleTimeString()}  ${line}`;
   console.log(stamped);
   logRing.push(stamped);
-  if (logRing.length > 500) logRing.shift();
-  controlWin?.webContents.send(IPC.log, stamped);
+  if (logRing.length > 2000) logRing.shift();
+  broadcast(IPC.log, stamped);
+}
+
+const WINDOW_SPECS: Record<WindowKind, { title: string; width: number; height: number; minWidth: number; minHeight: number; page: string }> = {
+  settings: { title: 'Settings', width: 1000, height: 720, minWidth: 820, minHeight: 520, page: 'settings.html' },
+  effects: { title: 'Output Effects', width: 1440, height: 860, minWidth: 1100, minHeight: 640, page: 'effects.html' },
+  perf: { title: 'Performance Details', width: 1340, height: 900, minWidth: 980, minHeight: 600, page: 'perf.html' },
+};
+
+function openUiWindow(kind: WindowKind, arg = ''): void {
+  const existing = uiWindows.get(kind);
+  const spec = WINDOW_SPECS[kind];
+  const file = path.join(__dirname, '..', '..', 'static', spec.page);
+  if (existing && !existing.isDestroyed()) {
+    if (arg && kind === 'effects') void existing.loadFile(file, { query: { arg } });
+    existing.show();
+    existing.focus();
+    return;
+  }
+  const win = new BrowserWindow({
+    width: spec.width,
+    height: spec.height,
+    minWidth: spec.minWidth,
+    minHeight: spec.minHeight,
+    title: spec.title,
+    icon: ICON,
+    backgroundColor: '#1e1e1e',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#262626', symbolColor: '#e8e8e8', height: 38 },
+    webPreferences: { preload: path.join(__dirname, '..', 'control', 'preload.js'), contextIsolation: true, sandbox: true },
+  });
+  win.removeMenu();
+  void win.loadFile(file, { query: arg ? { arg } : {} });
+  win.on('closed', () => uiWindows.delete(kind));
+  uiWindows.set(kind, win);
+}
+
+// ---------- performance history (1 Hz, 30 min) ----------
+const perfSamples: PerfSample[] = [];
+let perfCapturing = true;
+let perfSince = Date.now();
+function samplePerf(): void {
+  if (!perfCapturing) return;
+  const sys = systemStats();
+  perfSamples.push({
+    t: Date.now(),
+    cpu: sys.cpu,
+    memMB: sys.memMB,
+    rxMbps: sys.rxMbps,
+    outputs: (lastState?.outputs ?? []).map((o) => ({
+      id: o.id,
+      name: o.name,
+      inW: o.inWidth,
+      inH: o.inHeight,
+      inFps: o.inFps,
+      outW: o.outWidth,
+      outH: o.outHeight,
+      outFps: o.outFps,
+      latencyMs: o.latencyMs,
+      cycleMs: o.cycleMs ?? 0,
+    })),
+  });
+  if (perfSamples.length > 1800) perfSamples.splice(0, perfSamples.length - 1800);
 }
 
 function createControlWindow(): void {
@@ -117,7 +190,10 @@ function createControlWindow(): void {
     minHeight: 680,
     title: 'GMeet ISO',
     icon: ICON,
-    backgroundColor: '#0d0f12',
+    backgroundColor: '#1e1e1e',
+    // ZoomISO-style unified toolbar: our top bar is the title bar; Windows caption buttons overlay it.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#262626', symbolColor: '#e8e8e8', height: 48 },
     webPreferences: {
       preload: path.join(__dirname, '..', 'control', 'preload.js'),
       contextIsolation: true,
@@ -128,6 +204,7 @@ function createControlWindow(): void {
   void controlWin.loadFile(path.join(__dirname, '..', '..', 'static', 'control.html'));
   controlWin.on('closed', () => {
     controlWin = null;
+    for (const w of uiWindows.values()) if (!w.isDestroyed()) w.close();
     app.quit();
   });
 }
@@ -262,7 +339,7 @@ function pushSettings(): void {
     meetWin.webContents.setAudioMuted(settings.muteLocalAudio);
     meetWin.webContents.send(IPC.meetSettings, settings);
   }
-  controlWin?.webContents.send(IPC.meetSettings, settings);
+  broadcast(IPC.meetSettings, settings);
   syncDisplays();
 }
 
@@ -764,6 +841,27 @@ function registerIpc(): void {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle(IPC.system, () => systemStats());
+  ipcMain.handle(IPC.openWindow, (_e, kind: WindowKind, arg?: string) => openUiWindow(kind, arg ?? ''));
+  ipcMain.handle(IPC.logs, () => logRing.slice());
+  ipcMain.handle(IPC.perfHistory, () => perfSamples);
+  ipcMain.handle(IPC.perfControl, (_e, action: 'clear' | 'stop' | 'start') => {
+    if (action === 'clear') {
+      perfSamples.length = 0;
+      perfSince = Date.now();
+    } else if (action === 'stop') perfCapturing = false;
+    else if (action === 'start') {
+      perfCapturing = true;
+      perfSince = Date.now();
+    }
+    return { capturing: perfCapturing, since: perfSince };
+  });
+  ipcMain.handle(IPC.openPath, (_e, kind: 'recordings' | 'logs' | 'userData') => {
+    const dir =
+      kind === 'recordings' ? settings.recordDir || path.join(app.getPath('videos'), 'GMeet ISO') : app.getPath('userData');
+    fs.mkdirSync(dir, { recursive: true });
+    void shell.openPath(dir);
+  });
+  ipcMain.handle(IPC.setMeetWindowVisible, () => false); // offscreen windows can't be shown
 
   ipcMain.handle(IPC.meetGetSettings, () => settings);
   ipcMain.on(IPC.meetCommand, (_e, id: number, result: unknown) => {
@@ -773,16 +871,16 @@ function registerIpc(): void {
   let lastStateWrite = 0;
   ipcMain.on(IPC.meetState, (_e, s: MeetState) => {
     lastState = s;
-    controlWin?.webContents.send(IPC.state, s);
+    broadcast(IPC.state, s);
     if (Date.now() - lastStateWrite > 1000) {
       lastStateWrite = Date.now();
       fs.writeFile(path.join(app.getPath('userData'), 'state.json'), JSON.stringify(s, null, 2), () => {});
     }
   });
-  ipcMain.on(IPC.meetPreview, (_e, key: string, jpeg: Uint8Array) => controlWin?.webContents.send(IPC.preview, key, jpeg));
+  ipcMain.on(IPC.meetPreview, (_e, key: string, jpeg: Uint8Array) => broadcast(IPC.preview, key, jpeg));
   ipcMain.on(IPC.meetDevices, (_e, d: DeviceLists) => {
     lastDevices = d;
-    controlWin?.webContents.send(IPC.devicesChanged, d);
+    broadcast(IPC.devicesChanged, d);
     fs.writeFile(path.join(app.getPath('userData'), 'devices.json'), JSON.stringify(d, null, 2), () => {});
   });
   ipcMain.on(IPC.meetLog, (_e, line: string) => log(`[meet] ${line}`));
@@ -811,10 +909,43 @@ async function runCliCommand(cmd: string): Promise<void> {
       const img = await meetWin?.webContents.capturePage();
       if (img) fs.writeFileSync(path.join(ud, 'meet-snap.png'), img.toPNG());
       log('snapshot saved: meet-snap.png');
-    } else if (cmd === 'snap-ui') {
+    } else if (cmd === 'snap-ui' || cmd.startsWith('snap-ui:')) {
+      // snap-ui[:<name>[:<tab>]] — optionally switch the main window's tab first (atomic).
+      const [, name = 'ui-snap', tab = ''] = cmd.split(':');
+      if (tab) {
+        await controlWin?.webContents.executeJavaScript(`window.__showTab && window.__showTab(${JSON.stringify(tab)})`, true);
+        await new Promise((r) => setTimeout(r, 700));
+      }
       const img = await controlWin?.webContents.capturePage();
-      if (img) fs.writeFileSync(path.join(ud, 'ui-snap.png'), img.toPNG());
-      log('snapshot saved: ui-snap.png');
+      if (img) fs.writeFileSync(path.join(ud, `${name}.png`), img.toPNG());
+      log(`snapshot saved: ${name}.png`);
+    } else if (cmd === 'reload-ui') {
+      // Reload every UI window after `npm run build:ui` (no app restart, call stays up).
+      controlWin?.webContents.reloadIgnoringCache();
+      for (const w of uiWindows.values()) if (!w.isDestroyed()) w.webContents.reloadIgnoringCache();
+    } else if (cmd.startsWith('open:')) {
+      // open:<settings|effects|perf>[:<arg>]
+      const [, kind, ...rest] = cmd.split(':');
+      openUiWindow(kind as WindowKind, rest.join(':'));
+    } else if (cmd.startsWith('close:')) {
+      const w = uiWindows.get(cmd.slice(6) as WindowKind);
+      if (w && !w.isDestroyed()) w.close();
+    } else if (cmd.startsWith('snap-win:')) {
+      // snap-win:<kind>:<name>
+      const [, kind, name = `${kind}-snap`] = cmd.split(':');
+      const w = uiWindows.get(kind as WindowKind);
+      const img = w && !w.isDestroyed() ? await w.webContents.capturePage() : null;
+      if (img) fs.writeFileSync(path.join(ud, `${name}.png`), img.toPNG());
+      log(img ? `snapshot saved: ${name}.png` : `snap-win: ${kind} window not open`);
+    } else if (cmd.startsWith('eval-win:')) {
+      // eval-win:<kind>:<js> → eval-<kind>.txt
+      const rest = cmd.slice(9);
+      const i = rest.indexOf(':');
+      const kind = rest.slice(0, i) as WindowKind;
+      const w = uiWindows.get(kind);
+      const res = w && !w.isDestroyed() ? await w.webContents.executeJavaScript(rest.slice(i + 1), true) : 'window not open';
+      const out = typeof res === 'string' ? res : JSON.stringify(res, null, 2);
+      fs.writeFileSync(path.join(ud, `eval-${kind}.txt`), out ?? 'undefined');
     } else if (cmd.startsWith('eval:')) {
       const res = await meetWin?.webContents.executeJavaScript(cmd.slice(5), true);
       const out = typeof res === 'string' ? res : JSON.stringify(res, null, 2);
@@ -823,7 +954,7 @@ async function runCliCommand(cmd: string): Promise<void> {
     } else if (cmd.startsWith('eval-ui:')) {
       const res = await controlWin?.webContents.executeJavaScript(cmd.slice(8), true);
       const out = typeof res === 'string' ? res : JSON.stringify(res, null, 2);
-      fs.writeFileSync(path.join(ud, 'eval-result.txt'), out ?? 'undefined');
+      fs.writeFileSync(path.join(ud, 'eval-ui-result.txt'), out ?? 'undefined');
       log(`eval-ui done (${(out ?? '').length} chars)`);
     } else if (cmd.startsWith('set:')) {
       applySettingsPatch(JSON.parse(cmd.slice(4)) as Partial<Settings>);
@@ -875,7 +1006,10 @@ if (!app.requestSingleInstanceLock()) {
     syncDisplays();
     screen.on('display-added', syncDisplays);
     screen.on('display-removed', syncDisplays);
-    setInterval(() => controlWin?.webContents.send(IPC.system, systemStats()), 1000);
+    setInterval(() => {
+      broadcast(IPC.system, systemStats());
+      samplePerf();
+    }, 1000);
     const startCmd = cmdFromArgv(process.argv);
     if (startCmd) setTimeout(() => void runCliCommand(startCmd), 3000);
   });

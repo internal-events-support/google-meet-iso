@@ -343,6 +343,8 @@ export interface OutputState {
   preview: boolean;
   /** ms from frame arrival to NDI hand-off. */
   latencyMs: number;
+  /** ms spent rendering one output frame (draw + readback); 0 for passthrough. */
+  cycleMs?: number;
   audioLevel: number;
   recording: boolean;
   recordFile: string;
@@ -417,6 +419,27 @@ export interface ControlApi {
   system(): Promise<SystemStats>;
   /** Settings changed elsewhere (OSC, API, show file). */
   onSettings(cb: (s: Settings) => void): void;
+  /** Open (or focus) a secondary window. `arg` is passed as ?arg= (e.g. output id). */
+  openWindow(kind: WindowKind, arg?: string): Promise<void>;
+  /** Recent log lines (for windows opened later). */
+  logs(): Promise<string[]>;
+  /** Performance samples recorded by main (1 Hz, last 30 min). */
+  perfHistory(): Promise<PerfSample[]>;
+  /** Clear perf history; `capture` false pauses sampling. */
+  perfControl(action: 'clear' | 'stop' | 'start'): Promise<{ capturing: boolean; since: number }>;
+  openPath(kind: 'recordings' | 'logs' | 'userData'): Promise<void>;
+  /** Show/hide the (normally hidden) Meet window for troubleshooting. */
+  setMeetWindowVisible(visible: boolean): Promise<boolean>;
+}
+
+export type WindowKind = 'settings' | 'effects' | 'perf';
+
+export interface PerfSample {
+  t: number;
+  cpu: number;
+  memMB: number;
+  rxMbps: number;
+  outputs: { id: string; name: string; inW: number; inH: number; inFps: number; outW: number; outH: number; outFps: number; latencyMs: number; cycleMs: number }[];
 }
 
 export const IPC = {
@@ -434,6 +457,12 @@ export const IPC = {
   command: 'ctl:command',
   pickFile: 'ctl:pickFile',
   system: 'ctl:system',
+  openWindow: 'ctl:openWindow',
+  logs: 'ctl:logs',
+  perfHistory: 'ctl:perfHistory',
+  perfControl: 'ctl:perfControl',
+  openPath: 'ctl:openPath',
+  setMeetWindowVisible: 'ctl:setMeetWindowVisible',
   // main -> control
   state: 'ctl:state',
   log: 'ctl:log',
