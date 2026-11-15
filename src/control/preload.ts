@@ -22,6 +22,7 @@ const api: ControlApi = {
   perfControl: (action) => ipcRenderer.invoke('ctl:perfControl', action),
   openPath: (kind) => ipcRenderer.invoke('ctl:openPath', kind),
   setMeetWindowVisible: (v) => ipcRenderer.invoke('ctl:setMeetWindowVisible', v),
+  popupAppMenu: (x, y) => ipcRenderer.invoke('ctl:popupAppMenu', x, y),
   onState: (cb: (s: MeetState) => void) => {
     ipcRenderer.on('ctl:state', (_e, s: MeetState) => cb(s));
   },

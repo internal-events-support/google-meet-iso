@@ -105,8 +105,54 @@ export const ICONS: Record<string, string> = {
   ndiSource: S('<circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M5 5a4.2 4.2 0 0 0 0 6M11 5a4.2 4.2 0 0 1 0 6M3 3a7 7 0 0 0 0 10M13 3a7 7 0 0 1 0 10"/>'),
 };
 
+// ---------------------------------------------------------------------------
+// RE icons (ZoomISO v3 asset catalogue, static/re-assets/icons). Rendered as a CSS mask
+// so they take currentColor. Outline icons use the SVG; `.fill` icons use the @2x PNG
+// (the SF-Symbols SVG exports draw every layer solid in browsers).
+// ---------------------------------------------------------------------------
+export const RE_ASSET_BASE = 're-assets';
+export const RE_ICON_FILES: Record<string, string> = {
+  audio: 'audio.svg',
+  'camera.outline': 'camera.outline.svg',
+  'camera.slash.outline': 'camera.slash.outline.svg',
+  'chat.outline': 'chat.outline.svg',
+  'mic.outline': 'mic.outline.svg',
+  'mic.slash.outline': 'mic.slash.outline.svg',
+  osc: 'osc.svg',
+  'slash.commands': 'slash.commands.svg',
+  'speaker.outline': 'speaker.outline.svg',
+  'headset.fill': 'headset.fill@2x.png',
+  'profile.small.fill': 'profile.small.fill@2x.png',
+  'record.large.fill': 'record.large.fill@2x.png',
+  'screenshare.fill': 'screenshare.fill@2x.png',
+  'speaker.fill': 'speaker.fill@2x.png',
+  'spotlight.fill': 'spotlight.fill@2x.png',
+  'events.fill': 'zoom.events.fill@2x.png',
+  'video.fill': 'zoom.video.fill@2x.png',
+};
+/** Full-colour RE images (use as <img src>): test card, watermark, placeholders, frame guide. */
+export const RE_IMAGES = {
+  testcard: `${RE_ASSET_BASE}/images/testcard.png`,
+  colourbars: `${RE_ASSET_BASE}/images/colourbars.png`,
+  watermark: `${RE_ASSET_BASE}/images/watermark.png`,
+  profilePlaceholder: `${RE_ASSET_BASE}/images/profile-placeholder.png`,
+  videoLoss: `${RE_ASSET_BASE}/images/video-loss.png`,
+  frameGuide: `${RE_ASSET_BASE}/images/frame-guide.png`,
+} as const;
+
+export function reIconUrl(name: string): string | null {
+  const f = RE_ICON_FILES[name];
+  return f ? `${RE_ASSET_BASE}/icons/${f}` : null;
+}
+
+// The 'osc' key existed as a hand-drawn glyph; the RE asset replaces it (keep the old one as 'oscGlyph').
+ICONS.oscGlyph = ICONS.osc;
+for (const name of Object.keys(RE_ICON_FILES)) ICONS[name] = `<i style="-webkit-mask-image:url('${reIconUrl(name)}')"></i>`;
+
+/** Icon by name: kit glyphs (gear, plus, …) or RE icons ('mic.outline', 'speaker.fill', …). Size with font-size. */
 export function icon(name: string, cls = ''): HTMLSpanElement {
   const s = h('span.ico');
+  if (RE_ICON_FILES[name]) s.className += ' re-ico';
   if (cls) s.className += ' ' + cls;
   s.innerHTML = ICONS[name] ?? '';
   return s;

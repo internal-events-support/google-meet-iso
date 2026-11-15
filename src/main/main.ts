@@ -1,9 +1,16 @@
-import { app, BrowserWindow, dialog, ipcMain, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, type MenuItemConstructorOptions } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  DEFAULT_EFFECTS,
   DEFAULT_SETTINGS,
+  DEFAULT_VIDEO_LOSS,
   defaultOutputs,
+  migrateNameTagFont,
+  NESTED_SETTINGS_KEYS,
+  OSC_BAUD_MS,
+  type OutputEffects,
+  type OutputRef,
   findOutput,
   IPC,
   newOutput,
@@ -55,23 +62,78 @@ function normalizeOutputs(list: unknown, prefix: string): OutputConfig[] {
   if (!Array.isArray(list) || !list.length) return defaultOutputs(prefix);
   return list.map((o: Partial<OutputConfig>, i) => {
     const base = newOutput(i + 1, prefix);
-    return { ...base, ...o, id: o.id || base.id, effects: { ...base.effects, ...(o.effects ?? {}) } };
+    const effects = { ...base.effects, ...(o.effects ?? {}) };
+    effects.nameTagFont = migrateNameTagFont(effects.nameTagFont);
+    const videoLoss = o.videoLoss ? { ...DEFAULT_VIDEO_LOSS, ...o.videoLoss } : null;
+    return { ...base, ...o, id: o.id || base.id, effects, videoLoss };
   });
+}
+
+type Nested = Record<string, unknown>;
+/** Deep-merge the nested settings groups (videoLoss, recording, osc, …) of `patch` onto `base`. */
+function mergeNested(base: Settings, patch: Partial<Settings>): Settings {
+  const out = { ...base, ...patch } as Settings;
+  for (const k of NESTED_SETTINGS_KEYS) {
+    const p = patch[k] as Nested | undefined;
+    if (p && typeof p === 'object') (out as unknown as Record<string, Nested>)[k] = { ...(base[k] as unknown as Nested), ...p };
+  }
+  return out;
+}
+
+/** Build a full Settings from a (possibly old) settings.json, migrating legacy flat fields into the v3 groups. */
+function migrateSettings(raw: Partial<Settings>): Settings {
+  const s = mergeNested(DEFAULT_SETTINGS, raw);
+  if (!raw.videoLoss) s.videoLoss = { ...s.videoLoss, mode: s.defaultLossMode, image: s.defaultLossImage };
+  if (!raw.recording)
+    s.recording = {
+      ...s.recording,
+      selectNewOutputsByDefault: s.recordNewOutputs,
+      selectedOutputIds: (s.outputs ?? []).filter((o) => o.record).map((o) => o.id),
+    };
+  if (!raw.autoAssign) s.autoAssign = { ...s.autoAssign, includeNonVideoParticipants: s.autoAssignCamerasOff };
+  if (!raw.embeddedAudio) s.embeddedAudio = { defaultMode: s.defaultAudio, defaultDelayMs: s.defaultDelayMs };
+  if (!raw.osc) s.osc = { ...s.osc, enabled: s.oscEnabled, rxPort: s.oscListenPort, host: s.oscReplyHost, txPort: s.oscReplyPort };
+  return syncLegacy(s, {});
+}
+
+/**
+ * Keep legacy flat fields and the v3 groups in step, whichever side `patch` touched
+ * (osc ↔ osc*, embeddedAudio ↔ defaultAudio/defaultDelayMs, videoLoss ↔ defaultLoss*, recording ↔ recordNewOutputs,
+ * autoAssign ↔ autoAssignCamerasOff).
+ */
+function syncLegacy(s: Settings, patch: Partial<Settings>): Settings {
+  const legacyOsc = patch.oscEnabled !== undefined || patch.oscListenPort !== undefined || patch.oscReplyHost !== undefined || patch.oscReplyPort !== undefined;
+  if (legacyOsc && !patch.osc) s.osc = { ...s.osc, enabled: s.oscEnabled, rxPort: s.oscListenPort, host: s.oscReplyHost, txPort: s.oscReplyPort };
+  else Object.assign(s, { oscEnabled: s.osc.enabled, oscListenPort: s.osc.rxPort, oscReplyHost: s.osc.host, oscReplyPort: s.osc.txPort });
+  if ((patch.defaultAudio !== undefined || patch.defaultDelayMs !== undefined) && !patch.embeddedAudio)
+    s.embeddedAudio = { defaultMode: s.defaultAudio, defaultDelayMs: s.defaultDelayMs };
+  else Object.assign(s, { defaultAudio: s.embeddedAudio.defaultMode, defaultDelayMs: s.embeddedAudio.defaultDelayMs });
+  if ((patch.defaultLossMode !== undefined || patch.defaultLossImage !== undefined) && !patch.videoLoss)
+    s.videoLoss = { ...s.videoLoss, mode: s.defaultLossMode, image: s.defaultLossImage };
+  else Object.assign(s, { defaultLossMode: s.videoLoss.mode, defaultLossImage: s.videoLoss.image });
+  if (patch.recordNewOutputs !== undefined && !patch.recording) s.recording = { ...s.recording, selectNewOutputsByDefault: s.recordNewOutputs };
+  else s.recordNewOutputs = s.recording.selectNewOutputsByDefault;
+  if (patch.autoAssignCamerasOff !== undefined && !patch.autoAssign) s.autoAssign = { ...s.autoAssign, includeNonVideoParticipants: s.autoAssignCamerasOff };
+  else s.autoAssignCamerasOff = s.autoAssign.includeNonVideoParticipants;
+  return s;
 }
 
 function loadSettings(): void {
   try {
     const raw = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as Partial<Settings>;
-    settings = { ...DEFAULT_SETTINGS, ...raw };
+    settings = migrateSettings(raw);
   } catch {
-    settings = { ...DEFAULT_SETTINGS };
+    settings = migrateSettings({});
   }
   settings.outputs = normalizeOutputs(settings.outputs, settings.ndiPrefix || 'GMEET');
 }
+/** Set by "Clear Cache" so a pending save can't rewrite settings.json before quitting. */
+let doNotSave = false;
 let saveTimer: NodeJS.Timeout | null = null;
 function saveSettings(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    if (doNotSave) return;
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2));
   }, 200);
@@ -131,7 +193,7 @@ function openUiWindow(kind: WindowKind, arg = ''): void {
   const spec = WINDOW_SPECS[kind];
   const file = path.join(__dirname, '..', '..', 'static', spec.page);
   if (existing && !existing.isDestroyed()) {
-    if (arg && kind === 'effects') void existing.loadFile(file, { query: { arg } });
+    if (arg && (kind === 'effects' || kind === 'settings')) void existing.loadFile(file, { query: { arg } });
     existing.show();
     existing.focus();
     return;
@@ -200,7 +262,9 @@ function createControlWindow(): void {
       sandbox: true,
     },
   });
-  controlWin.removeMenu();
+  // Keep the application menu attached (accelerators: Ctrl+, / Ctrl+S / Ctrl+O …) but don't draw a menu bar;
+  // the UI can show it with gmeetIso.popupAppMenu().
+  controlWin.setMenuBarVisibility(false);
   void controlWin.loadFile(path.join(__dirname, '..', '..', 'static', 'control.html'));
   controlWin.on('closed', () => {
     controlWin = null;
@@ -345,11 +409,16 @@ function pushSettings(): void {
 
 function applySettingsPatch(patch: Partial<Settings>): Settings {
   const prev = settings;
-  settings = { ...settings, ...patch };
+  settings = syncLegacy(mergeNested(settings, patch), patch);
   if (patch.outputs) settings.outputs = normalizeOutputs(patch.outputs, settings.ndiPrefix || 'GMEET');
   if ((patch.meetWindowWidth || patch.meetWindowHeight) && meetWin && !meetWin.isDestroyed())
     meetWin.setContentSize(settings.meetWindowWidth, settings.meetWindowHeight);
-  if (patch.oscEnabled !== undefined || patch.oscListenPort !== undefined) restartOsc();
+  if (patch.osc || patch.oscEnabled !== undefined || patch.oscListenPort !== undefined) {
+    const a = prev.osc;
+    const b = settings.osc;
+    if (a.enabled !== b.enabled || a.rxPort !== b.rxPort || a.interface !== b.interface) restartOsc();
+    if (osc) osc.minGapMs = OSC_BAUD_MS[b.baudRate] ?? 0;
+  }
   if (patch.apiEnabled !== undefined || patch.apiPort !== undefined) restartApi();
   if (
     (patch.ndiDiscoveryServer !== undefined && patch.ndiDiscoveryServer !== prev.ndiDiscoveryServer) ||
@@ -403,6 +472,32 @@ function participantRef(ref: string | null): { key: string; name: string } | nul
   return p ? { key: p.key, name: p.displayName } : { key: ref, name: ref };
 }
 
+function routeOutput(ref: OutputRef, participant: string | null): { key: string; name: string } | null {
+  const o = outputOrThrow(ref);
+  const sel = participantRef(participant);
+  const isScreen = sel?.key.endsWith(':screen');
+  updateOutputs((list) =>
+    list.map((x) =>
+      x.id === o.id ? { ...x, selection: sel, mode: sel ? (isScreen ? 'screenshare' : 'participant') : x.mode === 'participant' ? 'auto' : x.mode } : x,
+    ),
+  );
+  return sel;
+}
+
+/** Effect keys per Output Effects tab, for resetEffects. */
+const EFFECT_SECTIONS: Record<'color' | 'crop' | 'overlays' | 'all', (keyof OutputEffects)[]> = (() => {
+  const color: (keyof OutputEffects)[] = [
+    'brightness', 'contrast', 'saturation', 'hue', 'exposure', 'vibrance', 'sharpness', 'temperature', 'whiteBalanceK', 'tint',
+    'highlights', 'shadows', 'vignette', 'toneCurve', 'liftR', 'liftG', 'liftB', 'gammaR', 'gammaG', 'gammaB', 'gainR', 'gainG', 'gainB',
+  ];
+  const crop: (keyof OutputEffects)[] = ['zoom', 'panX', 'panY', 'mirror', 'cropLeft', 'cropRight', 'cropTop', 'cropBottom', 'padBlack', 'cropZoom', 'cropPanX', 'cropPanY', 'cropRotation'];
+  const overlays: (keyof OutputEffects)[] = [
+    'nameTag', 'nameTagText', 'nameTagSubtitle', 'nameTagPosition', 'nameTagSize', 'nameTagFont', 'nameTagColor', 'nameTagBg', 'nameTagBgOpacity',
+    'nameTagAccent', 'images', 'nameTagNameMode', 'nameTagPlacement', 'nameTagTextAlignment', 'nameTagCornerRadius', 'nameTagOffset', 'overlayLayerOrder',
+  ];
+  return { color, crop, overlays, all: Object.keys(DEFAULT_EFFECTS) as (keyof OutputEffects)[] };
+})();
+
 async function executeCommand(c: Command): Promise<unknown> {
   switch (c.cmd) {
     case 'engine':
@@ -421,6 +516,8 @@ async function executeCommand(c: Command): Promise<unknown> {
     case 'addOutput': {
       const o = newOutput(settings.outputs.length + 1, settings.ndiPrefix || 'GMEET', c.patch);
       updateOutputs((list) => [...list, o]);
+      if (settings.recording.selectNewOutputsByDefault)
+        applySettingsPatch({ recording: { ...settings.recording, selectedOutputIds: [...settings.recording.selectedOutputIds, o.id] } });
       return o.id;
     }
     case 'deleteOutput': {
@@ -437,17 +534,83 @@ async function executeCommand(c: Command): Promise<unknown> {
       );
       return o.id;
     }
-    case 'route': {
-      const o = outputOrThrow(c.output);
+    case 'route':
+    case 'assignParticipant':
+      return routeOutput(c.output, c.participant);
+    case 'unassignParticipant': {
       const sel = participantRef(c.participant);
-      const isScreen = sel?.key.endsWith(':screen');
-      updateOutputs((list) =>
-        list.map((x) =>
-          x.id === o.id ? { ...x, selection: sel, mode: sel ? (isScreen ? 'screenshare' : 'participant') : x.mode === 'participant' ? 'auto' : x.mode } : x,
-        ),
-      );
-      return sel;
+      const hit = (x: OutputConfig) => !!x.selection && !!sel && (x.selection.key === sel.key || x.selection.name.toLowerCase() === sel.name.toLowerCase());
+      const ids = settings.outputs.filter(hit).map((x) => x.id);
+      updateOutputs((list) => list.map((x) => (hit(x) ? { ...x, selection: null, mode: x.mode === 'participant' ? 'auto' : x.mode } : x)));
+      return ids;
     }
+    case 'setAutoAssign': {
+      const o = outputOrThrow(c.output);
+      updateOutputs((list) => list.map((x) => (x.id === o.id ? { ...x, isAutoAssign: c.on } : x)));
+      return c.on;
+    }
+    case 'setVideoLoss': {
+      if (c.output === undefined) {
+        const videoLoss = { ...settings.videoLoss, ...(c.patch ?? {}) };
+        applySettingsPatch({ videoLoss });
+        // The engine still reads OutputConfig.lossMode/lossImage: mirror the global mode onto outputs without an active override.
+        updateOutputs((list) =>
+          list.map((x) => (videoLoss.perOutputVideoLossEnabled && x.videoLoss ? x : { ...x, lossMode: videoLoss.mode, lossImage: videoLoss.image })),
+        );
+        // TODO(engine): honour delay, displayOutputNameOnImage and profilePicture* in src/meet/outputs.ts.
+        return videoLoss;
+      }
+      const o = outputOrThrow(c.output);
+      const vl = c.patch === null ? null : { ...DEFAULT_VIDEO_LOSS, ...(o.videoLoss ?? settings.videoLoss), ...c.patch };
+      const eff = vl ?? settings.videoLoss;
+      updateOutputs((list) => list.map((x) => (x.id === o.id ? { ...x, videoLoss: vl, lossMode: eff.mode, lossImage: eff.image } : x)));
+      return vl;
+    }
+    case 'startRecording':
+    case 'stopRecording': {
+      const on = c.cmd === 'startRecording';
+      const refs = c.outputs ?? (on ? settings.recording.selectedOutputIds : undefined);
+      const ids = refs ? new Set(refs.map((r) => findOutput(settings.outputs, r)?.id).filter(Boolean) as string[]) : null;
+      if (on && ids) applySettingsPatch({ recording: { ...settings.recording, selectedOutputIds: [...ids] } });
+      // TODO(recording): format/codec/bitrate/file naming/low-disk are read by src/meet/recorder.ts (later agent).
+      updateOutputs((list) => list.map((x) => (ids && !ids.has(x.id) ? (on ? { ...x, record: false } : x) : { ...x, record: on && x.enabled })));
+      return ids ? [...ids] : 'all';
+    }
+    case 'resetEffects': {
+      const o = outputOrThrow(c.output);
+      const keys = EFFECT_SECTIONS[c.section ?? 'all'];
+      const reset: Partial<OutputEffects> = {};
+      for (const k of keys) (reset as Record<string, unknown>)[k] = structuredClone(DEFAULT_EFFECTS[k]);
+      updateOutputs((list) => list.map((x) => (x.id === o.id ? { ...x, effects: { ...x.effects, ...reset } } : x)));
+      return keys.length;
+    }
+    case 'copyEffects': {
+      const from = outputOrThrow(c.from);
+      const to = new Set(c.to.map((r) => outputOrThrow(r).id));
+      to.delete(from.id);
+      updateOutputs((list) => list.map((x) => (to.has(x.id) ? { ...x, effects: structuredClone(from.effects) } : x)));
+      return [...to];
+    }
+    case 'setOscCommandEnabled': {
+      const addr = c.address.toLowerCase();
+      const set = new Set(settings.osc.disabledCommands.map((a) => a.toLowerCase()));
+      if (c.enabled) set.delete(addr);
+      else set.add(addr);
+      applySettingsPatch({ osc: { ...settings.osc, disabledCommands: [...set] } });
+      return c.enabled;
+    }
+    case 'signOut':
+      await signOut();
+      return true;
+    case 'clearCache':
+      return clearCache(c.confirm !== false);
+    case 'spotlight':
+    case 'pin':
+    case 'lowerHand':
+    case 'muteAll':
+    case 'removeParticipant':
+      // TODO(meet): implement in src/meet/preload.ts runCommand (Meet DOM automation). Unknown commands return an error there today.
+      return forwardToMeet(c);
     case 'recordAll':
       updateOutputs((list) => list.map((x) => ({ ...x, record: c.on && x.enabled })));
       return c.on;
@@ -491,6 +654,13 @@ const SHOW_KEYS: (keyof Settings)[] = [
   'monitorDevice',
   'lastMeetUrl',
   'recordDir',
+  'videoLoss',
+  'recording',
+  'autoAssign',
+  'interface',
+  'advancedAudio',
+  'embeddedAudio',
+  'osc',
 ];
 
 async function saveShow(file?: string): Promise<string | null> {
@@ -514,6 +684,7 @@ async function loadShow(file?: string, merge = false): Promise<string | null> {
   }
   const show = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Settings>;
   const patch: Partial<Settings> = {};
+  // Older show files lack the v3 groups; mergeNested() in applySettingsPatch keeps defaults for missing fields.
   for (const k of SHOW_KEYS) if (show[k] !== undefined) (patch as Record<string, unknown>)[k] = show[k];
   if (merge && Array.isArray(show.outputs)) {
     const fresh = normalizeOutputs(show.outputs, settings.ndiPrefix).map((o) => ({ ...o, id: newOutput(0).id }));
@@ -533,7 +704,17 @@ const MODE_NAMES: Record<string, OutputMode> = {
   screen: 'screenshare',
   auto: 'auto',
 };
-const LOSS_NAMES: Record<string, LossMode> = { black: 'black', freeze: 'freeze', transparent: 'transparent', image: 'image', testcard: 'testcard', bars: 'testcard' };
+const LOSS_NAMES: Record<string, LossMode> = {
+  black: 'black',
+  freeze: 'freeze',
+  transparent: 'transparent',
+  image: 'image',
+  testcard: 'testcard',
+  bars: 'testcard',
+  colorbars: 'testcard',
+  profilepicture: 'profilePicture',
+  profile: 'profilePicture',
+};
 const norm = (v: OscArg) => String(v ?? '').toLowerCase().replace(/[\s_-]+/g, '');
 
 let osc: OscServer | null = null;
@@ -589,9 +770,23 @@ function oscReplies(cmd: string, reply: (a: string, args: OscArg[]) => void): bo
  *   /gmeet/saveShow <path> · loadShow <path>
  *   /gmeet/get{EngineState,OutputRouting,Participants,AudioLevels,ActiveSpeaker} · ping
  */
-async function onOsc(m: OscMessage, reply: (a: string, args: OscArg[]) => void, from: { address: string }): Promise<void> {
+async function onOsc(m: OscMessage, rawReply: (a: string, args: OscArg[]) => void, from: { address: string }): Promise<void> {
   const parts = m.address.split('/').filter(Boolean);
   if (!parts.length || !/^(gmeet|zoom|gmeetiso)$/i.test(parts[0])) return;
+  const o = settings.osc;
+  if (o.enableAllowList && o.allowList.length && !o.allowList.includes(from.address.replace(/^::ffff:/, ''))) {
+    log(`OSC: ignored ${m.address} from ${from.address} (not on allow list)`);
+    return;
+  }
+  const lower = m.address.toLowerCase();
+  const tail = '/' + parts.slice(1).join('/').toLowerCase();
+  if (o.disabledCommands.some((d) => d.toLowerCase() === lower || d.toLowerCase().replace(/^\/(gmeet|zoom)/, '') === tail)) {
+    log(`OSC: ${m.address} is disabled in the Command Browser`);
+    return;
+  }
+  // "OSC address header": rewrite our /gmeetosc reply prefix.
+  const prefix = (o.prepend || '/gmeetosc').replace(/\/+$/, '');
+  const reply = (a: string, args: OscArg[]) => rawReply(a.replace(/^\/gmeetosc/, prefix), args);
   oscSender = { host: from.address, port: settings.oscReplyPort };
   const path2 = parts.slice(1).map((p) => p.toLowerCase());
   const cmd = path2.join('/');
@@ -645,8 +840,8 @@ async function onOsc(m: OscMessage, reply: (a: string, args: OscArg[]) => void, 
       case 'setvideolossmode': {
         const lossMode = LOSS_NAMES[norm(a[0])];
         if (!lossMode) throw new Error(`bad loss mode ${a[0]}`);
-        updateOutputs((list) => list.map((o) => ({ ...o, lossMode })));
-        return;
+        c = { cmd: 'setVideoLoss', patch: { mode: lossMode } };
+        break;
       }
       case 'setoutputaudio': {
         const audio = norm(a[1]) as EmbeddedAudio;
@@ -691,8 +886,8 @@ async function onOsc(m: OscMessage, reply: (a: string, args: OscArg[]) => void, 
       case 'startrecording':
       case 'stoprecording': {
         const on = cmd === 'startrecording';
-        if (a.length) c = { cmd: 'updateOutput', output: out(0), patch: { record: on } };
-        else c = { cmd: 'recordAll', on };
+        const outs = a.length ? a.map((_, i) => out(i)) : undefined;
+        c = on ? { cmd: 'startRecording', outputs: outs } : { cmd: 'stopRecording', outputs: outs };
         break;
       }
       case 'saveshow':
@@ -723,7 +918,128 @@ function restartOsc(): void {
     () => ({ host: settings.oscReplyHost || oscSender?.host || '', port: settings.oscReplyPort }),
     log,
   );
-  osc.start(settings.oscListenPort);
+  osc.minGapMs = OSC_BAUD_MS[settings.osc.baudRate] ?? 0;
+  osc.start(settings.osc.rxPort, settings.osc.interface);
+}
+
+// ---------- account / cache ----------
+function msgBox(opts: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  return controlWin && !controlWin.isDestroyed() ? dialog.showMessageBox(controlWin, opts) : dialog.showMessageBox(opts);
+}
+
+async function signOut(): Promise<void> {
+  const phase = lastState?.phase ?? '';
+  if (phase === 'in-call' || phase === 'waiting') await leaveMeeting();
+  const ses = session.fromPartition(MEET_PARTITION);
+  await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] });
+  settings = { ...settings, botName: '' };
+  saveSettings();
+  log('Signed out');
+  if (meetWin && !meetWin.isDestroyed() && !IS_MOCK) void meetWin.loadURL(MEET_HOME);
+}
+
+/** Menu "Clear Cache (app will close)": RE clearSettings — wipe settings.json + the Meet HTTP cache, then quit. Sign-in is kept. */
+async function clearCache(ask: boolean): Promise<boolean> {
+  if (ask) {
+    const r = await msgBox({
+      type: 'warning',
+      buttons: ['Cancel', 'Clear Cache'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Clear Cache',
+      message: 'Clear Cache (app will close)',
+      detail: 'All GMeet ISO settings and outputs are reset to defaults and the app quits. Export your configuration first if you want to keep it.',
+    });
+    if (r.response !== 1) return false;
+  }
+  doNotSave = true;
+  if (saveTimer) clearTimeout(saveTimer);
+  try {
+    fs.rmSync(settingsPath(), { force: true });
+    await session.fromPartition(MEET_PARTITION).clearCache();
+  } catch (e) {
+    log(`clear cache: ${(e as Error).message}`);
+  }
+  log('Cache cleared — quitting');
+  app.quit();
+  return true;
+}
+
+// ---------- application menu (RE 07-Menu-Bar, adapted to Windows) ----------
+function buildAppMenu(): Menu {
+  const tpl: MenuItemConstructorOptions[] = [
+    {
+      label: 'GMeet ISO',
+      submenu: [
+        {
+          label: 'About GMeet ISO',
+          click: () =>
+            void msgBox({
+              type: 'info',
+              title: 'About GMeet ISO',
+              message: `GMeet ISO ${app.getVersion()}`,
+              detail: `Isolated NDI outputs from Google Meet.\nElectron ${process.versions.electron} · Chromium ${process.versions.chrome}`,
+              icon: ICON,
+            }),
+        },
+        { type: 'separator' },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openUiWindow('settings') },
+        { type: 'separator' },
+        { label: 'Sign in with embedded browser', click: () => openSignIn() },
+        { label: 'Sign Out', click: () => void signOut().catch((e) => log(`sign out failed: ${(e as Error).message}`)) },
+        { type: 'separator' },
+        { label: 'Quit GMeet ISO', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+      ],
+    },
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Export Configuration', accelerator: 'CmdOrCtrl+S', click: () => void saveShow().catch((e) => log(`export failed: ${(e as Error).message}`)) },
+        { label: 'Load Configuration', accelerator: 'CmdOrCtrl+O', click: () => void loadShow().catch((e) => log(`load failed: ${(e as Error).message}`)) },
+        { type: 'separator' },
+        { label: 'Clear Cache (app will close)', click: () => void clearCache(true) },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { label: 'Show Logging', click: () => openUiWindow('settings', 'logs') },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'GMeet ISO Help',
+          accelerator: 'F1',
+          click: () => {
+            const readme = path.join(__dirname, '..', '..', 'README.md');
+            if (fs.existsSync(readme)) void shell.openPath(readme);
+            else void shell.openExternal('https://support.google.com/meet');
+          },
+        },
+        { label: 'Check for Updates', enabled: false },
+      ],
+    },
+  ];
+  return Menu.buildFromTemplate(tpl);
 }
 
 // ---------- HTTP / WebSocket API ----------
@@ -862,6 +1178,10 @@ function registerIpc(): void {
     void shell.openPath(dir);
   });
   ipcMain.handle(IPC.setMeetWindowVisible, () => false); // offscreen windows can't be shown
+  ipcMain.handle(IPC.popupAppMenu, (e, x?: number, y?: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    Menu.getApplicationMenu()?.popup({ window: win, x: x === undefined ? undefined : Math.round(x), y: y === undefined ? undefined : Math.round(y) });
+  });
 
   ipcMain.handle(IPC.meetGetSettings, () => settings);
   ipcMain.on(IPC.meetCommand, (_e, id: number, result: unknown) => {
@@ -991,6 +1311,7 @@ if (!app.requestSingleInstanceLock()) {
     const ndiDir = applyNdiConfig(app.getPath('userData'), settings.ndiDiscoveryServer, settings.ndiNicIps);
     if (ndiDir) log(`NDI config: ${ndiDir}`);
     registerIpc();
+    Menu.setApplicationMenu(buildAppMenu());
     setupMeetSession();
     initFinder();
     createControlWindow();

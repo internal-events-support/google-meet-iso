@@ -98,6 +98,9 @@ export class OutputPipeline {
   private outH = 0;
   private latency = 0;
   private audioPeak = 0;
+  /** Engine cycle time (ms, EMA): draw + readback for canvas outputs, copy + send for passthrough. */
+  private cycle = 0;
+  private cycleT0 = 0;
   private thumb = new Thumbnailer(320);
   private recorder: Recorder | null = null;
 
@@ -261,8 +264,10 @@ export class OutputPipeline {
       }
       buf = this.bufPool.pop() ?? null;
       if (!buf || buf.byteLength !== size) buf = new ArrayBuffer(size);
+      const ct0 = performance.now();
       await frame.copyTo(buf, opts as VideoFrameCopyToOptions);
       this.sender?.sendVideo(buf, w, h, ndiFmt, layout[0].stride);
+      this.noteCycle(performance.now() - ct0);
       if (this.cfg.lossMode === 'freeze') this.lastPass = { buf: buf.slice(0), w, h, fmt: ndiFmt, stride: layout[0].stride };
       else this.lastPass = { buf: this.lastPass?.buf ?? new ArrayBuffer(0), w, h, fmt: ndiFmt, stride: layout[0].stride };
       this.noteOut(w, h, arrivedAt);
@@ -347,6 +352,7 @@ export class OutputPipeline {
       this.refreshPreview();
       return;
     }
+    this.cycleT0 = performance.now();
     let arrivedAt = performance.now();
     if (live && cur) {
       this.drawSource(cur.frame);
@@ -488,6 +494,8 @@ export class OutputPipeline {
   private async readbackAndSend(arrivedAt: number, fpsN: number, fpsD: number, key = ''): Promise<void> {
     if (!this.sender || !this.canvas || this.readbackBusy) return;
     this.readbackBusy = true;
+    const ct0 = this.cycleT0 && performance.now() - this.cycleT0 < 1000 ? this.cycleT0 : performance.now();
+    this.cycleT0 = 0;
     let vf: VideoFrame | null = null;
     try {
       const W = this.canvas.width;
@@ -498,6 +506,7 @@ export class OutputPipeline {
       if (!buf || buf.byteLength !== W * H * 4) buf = new ArrayBuffer(W * H * 4);
       await vf.copyTo(buf, { format: 'BGRA', layout: [{ offset: 0, stride: W * 4 }] } as unknown as VideoFrameCopyToOptions);
       this.sender?.sendVideo(buf, W, H, 'BGRA', W * 4, fpsN, fpsD);
+      this.noteCycle(performance.now() - ct0);
       if (this.cache && this.cache.buf.byteLength === W * H * 4 && this.bufPool.length < 2) this.bufPool.push(this.cache.buf);
       this.cache = { buf, key, w: W, h: H };
       this.noteOut(W, H, arrivedAt);
@@ -535,6 +544,10 @@ export class OutputPipeline {
         }
       })
       .finally(() => vf.close());
+  }
+
+  private noteCycle(ms: number): void {
+    this.cycle = this.cycle ? this.cycle * 0.9 + ms * 0.1 : ms;
   }
 
   private noteOut(w: number, h: number, arrivedAt: number): void {
@@ -606,6 +619,7 @@ export class OutputPipeline {
       program: st?.program ?? false,
       preview: st?.preview ?? false,
       latencyMs: Math.round(this.latency),
+      cycleMs: Math.round(this.cycle * 10) / 10,
       audioLevel: Math.round(this.audioPeak * 1000) / 1000,
       recording: !!this.recorder,
       recordFile: this.recorder?.file ?? '',

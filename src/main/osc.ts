@@ -125,7 +125,8 @@ export class OscServer {
     private log: (s: string) => void,
   ) {}
 
-  start(port: number): void {
+  /** `address` = local interface IP to bind ('' = all interfaces). */
+  start(port: number, address = ''): void {
     this.stop();
     const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
     sock.on('error', (e) => this.log(`OSC error: ${e.message}`));
@@ -140,18 +141,47 @@ export class OscServer {
         this.onMessage(m, (address, args) => this.send(address, args), rinfo);
       }
     });
-    sock.bind(port, () => this.log(`OSC listening on udp/${port}`));
+    const onBound = () => this.log(`OSC listening on udp/${address || '*'}:${port}`);
+    if (address) sock.bind(port, address, onBound);
+    else sock.bind(port, onBound);
     this.sock = sock;
   }
 
+  /** Minimum gap between outgoing messages (OSC baud rate). 0 = send immediately. */
+  minGapMs = 0;
+  private queue: { address: string; args: OscArg[] }[] = [];
+  private lastSend = 0;
+  private timer: NodeJS.Timeout | null = null;
+
   send(address: string, args: OscArg[]): void {
+    if (this.minGapMs <= 0) return this.sendNow(address, args);
+    this.queue.push({ address, args });
+    this.pump();
+  }
+
+  private pump(): void {
+    if (this.timer || !this.queue.length) return;
+    const wait = Math.max(0, this.lastSend + this.minGapMs - Date.now());
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const m = this.queue.shift();
+      if (m) this.sendNow(m.address, m.args);
+      this.pump();
+    }, wait);
+  }
+
+  private sendNow(address: string, args: OscArg[]): void {
     const { host, port } = this.replyTarget();
     if (!this.sock || !host || !port) return;
+    this.lastSend = Date.now();
     const b = encode(address, args);
     this.sock.send(b, port, host);
   }
 
   stop(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.queue = [];
     try {
       this.sock?.close();
     } catch {

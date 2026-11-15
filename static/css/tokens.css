@@ -4,16 +4,48 @@
    colours or control styles in tab CSS; extend here if something is missing.
    ===================================================================== */
 :root {
-  /* surfaces */
-  --win: #1e1e1e;            /* window background */
-  --bar: #262626;            /* top bar / bottom bar */
-  --panel: #2b2b2b;          /* cards, grouped lists, tables */
-  --panel-2: #323232;        /* nested rows, table header */
-  --panel-hover: #363636;
-  --control: #3a3a3a;        /* popup buttons, push buttons, steppers */
-  --control-hover: #444444;
-  --control-active: #4d4d4d;
-  --field: #1c1c1c;          /* text fields (inset) */
+  /* ---- RE data/colors.css, dark appearance (exact). Use these names in new CSS. ---- */
+  --button-bg: #3D3D3D;
+  --button-bg-disabled: #383838;
+  --button-bg2: #404040;
+  --button-bottom-bevel: #3B3B3B;
+  --button-bottom-bevel-disabled: #383838;
+  --button-top-bevel: #3F3F3F;
+  --button-top-bevel-disabled: #3C3C3C;
+  --capture-engine-disabled: #404040;
+  --fill-global-error: #DA1639;
+  --fill-global-success: #268543;
+  --fill-global-warning: #B36200;
+  --fill-primary: #4793F1;
+  --meter-bg: #3E3E3E;
+  --meter-border: #FEFFFF;
+  --output-card-bg: #2D2D2D;
+  --output-card-shadow: #FEFFFF;
+  --picker-bg: #333333;
+  --picker-selected-bg: #666666;
+  --selected-tab-color: #404040;
+  --selected-tab-color-unfocused: #181818;
+  --splash-screen-bottom-iso: #1A6333;
+  --splash-screen-bottom-osc: #FFDD54;
+  --splash-screen-top-iso: #75E073;
+  --splash-screen-top-osc: #FFEB99;
+  --table-bg: #313131;
+  --table-header-bg: #3D3D3D;
+  --table-row-bg: #363636;
+  --window-bg: #222222;
+  /* Measured from the reference screenshots (no named asset): unified toolbar. */
+  --toolbar-bg: #383838;
+
+  /* ---- legacy names, aliased onto the RE tokens (keep working) ---- */
+  --win: var(--window-bg);            /* window background */
+  --bar: var(--toolbar-bg);           /* top bar / bottom bar */
+  --panel: var(--output-card-bg);     /* cards, grouped lists */
+  --panel-2: var(--table-header-bg);  /* nested rows, table header */
+  --panel-hover: var(--table-row-bg);
+  --control: var(--button-bg);        /* popup buttons, push buttons, steppers */
+  --control-hover: var(--button-bg2);
+  --control-active: var(--picker-selected-bg);
+  --field: #1c1c1c;          /* text fields (inset) — no RE asset */
   --well: #000000;           /* video wells */
   --sep: rgba(255,255,255,0.08);      /* hairline separators */
   --border: rgba(255,255,255,0.10);   /* card borders */
@@ -26,13 +58,13 @@
   --label: #8c8c8c;          /* caption labels under controls */
 
   /* system colours (macOS dark) */
-  --blue: #0a84ff;
-  --blue-press: #0071e3;
+  --blue: var(--fill-primary);
+  --blue-press: #0E72ED;      /* RE fill-primary (light) as pressed shade */
   --green: #30d158;
-  --green-ui: #28a745;       /* toggle on / capture enabled pill */
-  --green-pill: #1f7a34;
+  --green-ui: var(--fill-global-success); /* toggle on / capture enabled pill */
+  --green-pill: var(--fill-global-success);
   --red: #ff453a;
-  --red-btn: #c9372c;
+  --red-btn: var(--fill-global-error);
   --orange: #ff9f0a;
   --yellow: #ffd60a;
   --purple: #bf5af2;
@@ -48,6 +80,12 @@
   --topbar-h: 48px;
 
   /* type */
+  /* status aliases */
+  --success: var(--fill-global-success);
+  --warning: var(--fill-global-warning);
+  --error: var(--fill-global-error);
+  --primary: var(--fill-primary);
+
   --font: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Consolas, monospace;
   --fs: 13px;
@@ -68,8 +106,8 @@ body {
 }
 [hidden] { display: none !important; }
 input, textarea { user-select: text; }
-::selection { background: rgba(10,132,255,.45); }
-:focus-visible { outline: 3px solid rgba(10,132,255,.55); outline-offset: 1px; }
+::selection { background: rgba(71,147,241,.45); }
+:focus-visible { outline: 3px solid rgba(71,147,241,.55); outline-offset: 1px; }
 
 /* scrollbars: macOS overlay style */
 ::-webkit-scrollbar { width: 11px; height: 11px; }
@@ -106,7 +144,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
 .btn.sm { height: 20px; padding: 0 8px; font-size: var(--fs-sm); }
 .btn.lg { height: 30px; padding: 0 14px; }
 .btn.primary { background: var(--blue); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: #2b95ff; }
+.btn.primary:hover:not(:disabled) { background: #5C9FF3; }
 .btn.danger { background: var(--red-btn); color: #fff; }
 .btn.danger:hover:not(:disabled) { background: #d8463a; }
 .btn.block { width: 100%; }
@@ -145,7 +183,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
   padding: 0 24px 0 9px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; cursor: default;
 }
 .popup select:disabled { color: var(--text-3); }
-.popup select option, .popup select optgroup { background: #2d2d2d; color: var(--text); }
+.popup select option, .popup select optgroup { background: var(--output-card-bg); color: var(--text); }
 .popup::after {
   content: ""; position: absolute; right: 7px; top: 50%; width: 8px; height: 12px; margin-top: -6px; pointer-events: none;
   background: no-repeat center/8px 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12'%3E%3Cpath d='M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8' fill='none' stroke='%23e8e8e8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -191,7 +229,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
   box-shadow: inset 0 0 0 0.5px rgba(255,255,255,.14);
   font: var(--fs) var(--font);
 }
-.field:focus { outline: 0; box-shadow: 0 0 0 3px rgba(10,132,255,.55), inset 0 0 0 0.5px rgba(255,255,255,.14); }
+.field:focus { outline: 0; box-shadow: 0 0 0 3px rgba(71,147,241,.55), inset 0 0 0 0.5px rgba(255,255,255,.14); }
 .field::placeholder { color: var(--text-3); }
 .field.search { padding-left: 24px; border-radius: var(--r-sm); background: var(--control) no-repeat 7px center/12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='7' cy='7' r='5' fill='none' stroke='%23a6a6a6' stroke-width='1.6'/%3E%3Cpath d='m11 11 3.5 3.5' stroke='%23a6a6a6' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E"); box-shadow: none; }
 
@@ -285,3 +323,11 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
 
 /* ---------- empty state ---------- */
 .empty { display: grid; place-items: center; color: var(--text-2); text-align: center; padding: 40px; }
+
+/* ---- RE icons (kit.ts icon('mic.outline') etc.): masked so they take currentColor ---- */
+.ico.re-ico { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; flex: none; }
+.ico.re-ico > i {
+  display: block; width: 100%; height: 100%;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain;
+}
