@@ -1,0 +1,28 @@
+{
+  "name": "gmeet-iso",
+  "version": "0.1.0",
+  "description": "Zoom-ISO-style per-participant NDI feeds for Google Meet",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build:native": "node-gyp rebuild",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run build:native && npm run build:ts",
+    "start": "npm run build:ts && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "mock": "npm run build:ts && cross-env-shell GMEET_ISO_MOCK=1 electron .",
+    "verify:ndi": "node scripts/verify-ndi.js"
+  },
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "cross-env": "^10.1.0",
+    "electron": "^45.3.2",
+    "node-gyp": "^11.5.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.9.2"
+  },
+  "private": true
+}

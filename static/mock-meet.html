@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- Mock of Google Meet's in-call DOM, used to test the capture/NDI pipeline without a
+     real meeting. Run with: npm run mock  (GMEET_ISO_MOCK=1). -->
+<html>
+<head><meta charset="utf-8"><title>Mock Meet</title>
+<style>
+  body { margin: 0; background: #202124; color: #fff; font: 14px sans-serif; }
+  #grid { display: grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; gap: 8px; padding: 8px; height: calc(100vh - 60px); }
+  .tile { position: relative; background: #3c4043; border-radius: 8px; overflow: hidden; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; }
+  .name { position: absolute; left: 8px; bottom: 6px; }
+  footer { height: 44px; display: flex; justify-content: center; align-items: center; }
+</style></head>
+<body>
+<div id="grid"></div>
+<footer><button aria-label="Leave call">Leave</button></footer>
+<script>
+  const people = [
+    { id: 'spaces/x/devices/101', name: 'Alice Anderson', color: '#e53935', w: 1280, h: 720 },
+    { id: 'spaces/x/devices/102', name: 'Bob Brown', color: '#43a047', w: 640, h: 360 },
+    { id: 'spaces/x/devices/103', name: 'Bob Brown (Presentation)', color: '#1e88e5', w: 1920, h: 1080 },
+    { id: 'spaces/x/devices/100', name: 'ISO Bot', color: '#555', w: 320, h: 180, self: true },
+    { id: 'spaces/x/devices/104', name: 'Carol (camera off)', off: true },
+  ];
+  const grid = document.getElementById('grid');
+  for (const p of people) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.setAttribute('data-participant-id', p.id);
+    const name = document.createElement('div');
+    name.className = 'name';
+    if (p.self) { const s = document.createElement('span'); s.setAttribute('data-self-name', p.name); s.textContent = 'You'; name.appendChild(s); }
+    else { const s = document.createElement('span'); s.className = 'notranslate'; s.textContent = p.name; name.appendChild(s); }
+    if (!p.off) {
+      const c = document.createElement('canvas'); c.width = p.w; c.height = p.h;
+      const ctx = c.getContext('2d');
+      let t = 0;
+      setInterval(() => {
+        ctx.fillStyle = p.color; ctx.fillRect(0, 0, p.w, p.h);
+        ctx.fillStyle = '#fff'; ctx.font = `${Math.round(p.h / 8)}px sans-serif`;
+        ctx.fillText(`${p.name}  ${t++}`, 20, p.h / 2);
+        ctx.fillRect((t * 7) % p.w, p.h - 40, 40, 40);
+      }, 33);
+      const v = document.createElement('video');
+      v.muted = true; v.autoplay = true; v.playsInline = true;
+      v.srcObject = c.captureStream(30);
+      tile.appendChild(v);
+    }
+    tile.appendChild(name);
+    grid.appendChild(tile);
+  }
+  // Simulate a participant leaving after 20s.
+  setTimeout(() => document.querySelector('[data-participant-id="spaces/x/devices/102"]')?.remove(), 20000);
+</script>
+</body>
+</html>
