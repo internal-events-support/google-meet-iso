@@ -149,13 +149,25 @@ export class OscServer {
 
   /** Minimum gap between outgoing messages (OSC baud rate). 0 = send immediately. */
   minGapMs = 0;
-  private queue: { address: string; args: OscArg[] }[] = [];
+  private queue: { address: string; args: OscArg[]; key?: string }[] = [];
   private lastSend = 0;
   private timer: NodeJS.Timeout | null = null;
 
-  send(address: string, args: OscArg[]): void {
+  /**
+   * Queue (baud rate) or send. With a coalesceKey, a still-queued message with the same key is
+   * replaced so slow baud rates deliver the latest state instead of a growing backlog.
+   */
+  send(address: string, args: OscArg[], coalesceKey?: string): void {
     if (this.minGapMs <= 0) return this.sendNow(address, args);
-    this.queue.push({ address, args });
+    if (coalesceKey) {
+      const i = this.queue.findIndex((q) => q.key === coalesceKey);
+      if (i >= 0) {
+        this.queue[i] = { address, args, key: coalesceKey };
+        return;
+      }
+    }
+    if (this.queue.length >= 2000) this.queue.shift();
+    this.queue.push({ address, args, key: coalesceKey });
     this.pump();
   }
 

@@ -411,7 +411,12 @@ export type Command =
   /** Sign the bot's Google account out of Meet. */
   | { cmd: 'signOut' }
   /** Menu "Clear Cache (app will close)": wipe settings + Meet cache, then quit. `confirm: false` skips the dialog. */
-  | { cmd: 'clearCache'; confirm?: boolean };
+  | { cmd: 'clearCache'; confirm?: boolean }
+  // ---- [osc-agent] ZoomOSC/ZoomISO OSC coverage ----
+  /** Raise/lower the bot's own hand in Meet (forwarded to the Meet page). */
+  | { cmd: 'raiseHand'; on: boolean }
+  /** OSC /subscribe: set Settings.osc.subscribeMode. */
+  | { cmd: 'setOscSubscribe'; mode: OscSubscribeMode };
 
 
 // =====================================================================
@@ -690,6 +695,10 @@ export interface Settings {
   audioOutputDevices: string[];
   /** Audio tab: local input devices enrolled in the Inputs routing table (in display order). */
   audioInputDevices: string[];
+  /** [audio-agent] Audio tab: per-device channel routing, keyed by output-device label. */
+  audioOutputConfig?: Record<string, AudioOutputDeviceConfig>;
+  /** [audio-agent] CombinedAudioDeviceSheet sort order (RE DeviceSortOrder). */
+  audioDeviceSortOrder?: DeviceSortOrder;
   // ---- Phase 0 groups (deep-merged with defaults on load by main.ts) ----
   videoLoss: GlobalVideoLossSettings;
   recording: RecordingSettings;
@@ -885,6 +894,9 @@ export interface MeetState {
   waiting: string[];
   rxMbps: number;
   mixLevel: number;
+  /** [audio-agent] Audio Outputs: per-device channel peaks (0..1) and the device's real channel count. */
+  audioOutputMeters?: Record<string, number[]>;
+  audioOutputChannels?: Record<string, number>;
   updatedAt: number;
 }
 
@@ -1273,3 +1285,30 @@ export const LOG_LEVEL_OPTIONS: OptionItem<Settings['logLevel']>[] = [
   { value: 'info', label: 'Info' },
   { value: 'verbose', label: 'Verbose' },
 ];
+
+// ---------------------------------------------------------------------------
+// [audio-agent] Audio Outputs routing (RE ZISOAudioDevice / ZISOAudioOutputNode)
+// ---------------------------------------------------------------------------
+/** RE DeviceSortOrder. */
+export type DeviceSortOrder = 'alphabetical' | 'reverseAlphabetical' | 'manual';
+/** RE ZISOAudioOutputNode: one channel of a local output device. */
+export interface AudioOutputChannelConfig {
+  /** Custom channel name ('' = "Channel N"). */
+  name?: string;
+  mode: AudioChannelMode;
+  /** participant key (mode participant) or output id (mode output). */
+  selection: string;
+  /** Display name of the selected participant (re-match across calls). */
+  selectionName?: string;
+  /** Mono = (L+R)/2, left, right. */
+  pan: AudioPan;
+  /** Gain reduction, dB (<= 0). */
+  gainDb: number;
+  delayMs: number;
+  /** Shown in the table (eye button / DeviceChannelSelectionModal). */
+  visible?: boolean;
+}
+export interface AudioOutputDeviceConfig {
+  channels: AudioOutputChannelConfig[];
+  collapsed?: boolean;
+}

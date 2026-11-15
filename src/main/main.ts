@@ -30,6 +30,7 @@ import {
 import { ApiServer } from './api';
 import { applyNdiConfig } from './ndiconfig';
 import { OscServer, type OscArg, type OscMessage } from './osc';
+import { OscRouter, setActiveRouter } from './osc/router'; // [osc-agent]
 
 // Keep the hidden Meet client rendering/decoding at full rate.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -604,6 +605,13 @@ async function executeCommand(c: Command): Promise<unknown> {
       return true;
     case 'clearCache':
       return clearCache(c.confirm !== false);
+    // [osc-agent]
+    case 'raiseHand':
+      return forwardToMeet(c);
+    // [osc-agent]
+    case 'setOscSubscribe':
+      applySettingsPatch({ osc: { ...settings.osc, subscribeMode: c.mode } });
+      return c.mode;
     case 'spotlight':
     case 'pin':
     case 'lowerHand':
@@ -661,6 +669,8 @@ const SHOW_KEYS: (keyof Settings)[] = [
   'advancedAudio',
   'embeddedAudio',
   'osc',
+  'audioOutputDevices', // [audio-agent]
+  'audioOutputConfig', // [audio-agent]
 ];
 
 async function saveShow(file?: string): Promise<string | null> {
@@ -719,6 +729,16 @@ const norm = (v: OscArg) => String(v ?? '').toLowerCase().replace(/[\s_-]+/g, ''
 
 let osc: OscServer | null = null;
 let oscSender: { host: string; port: number } | null = null;
+// [osc-agent] ZoomOSC/ZoomISO-compatible router (src/main/osc/router.ts); legacy onOsc below handles the rest.
+const oscRouter = new OscRouter({
+  settings: () => settings,
+  state: () => lastState,
+  exec: (c) => executeCommand(c),
+  send: (a, args, key) => osc?.send(a, args, key),
+  log: (s) => log(s),
+  version: app.getVersion(),
+});
+setActiveRouter(oscRouter);
 
 function oscReplies(cmd: string, reply: (a: string, args: OscArg[]) => void): boolean {
   const st = lastState;
@@ -771,6 +791,9 @@ function oscReplies(cmd: string, reply: (a: string, args: OscArg[]) => void): bo
  *   /gmeet/get{EngineState,OutputRouting,Participants,AudioLevels,ActiveSpeaker} · ping
  */
 async function onOsc(m: OscMessage, rawReply: (a: string, args: OscArg[]) => void, from: { address: string }): Promise<void> {
+  // [osc-agent]
+  if (/^\/(gmeet|gmeetiso|zoom|zoomosc)(\/|$)/i.test(m.address)) oscSender = { host: from.address, port: settings.oscReplyPort };
+  if (await oscRouter.handle(m, rawReply, from)) return;
   const parts = m.address.split('/').filter(Boolean);
   if (!parts.length || !/^(gmeet|zoom|gmeetiso)$/i.test(parts[0])) return;
   const o = settings.osc;
@@ -1191,6 +1214,7 @@ function registerIpc(): void {
   let lastStateWrite = 0;
   ipcMain.on(IPC.meetState, (_e, s: MeetState) => {
     lastState = s;
+    oscRouter.onState(s); // [osc-agent]
     broadcast(IPC.state, s);
     if (Date.now() - lastStateWrite > 1000) {
       lastStateWrite = Date.now();

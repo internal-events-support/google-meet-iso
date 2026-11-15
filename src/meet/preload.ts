@@ -23,6 +23,7 @@ import {
   type Settings,
 } from '../shared/types';
 import { AudioRouter } from './audio';
+import { OutputDeviceRouter } from './audioRouting'; // [audio-agent]
 import { BotCamera, getCamCanvas, Thumbnailer } from './camsource';
 import {
   accountName,
@@ -45,6 +46,17 @@ import {
   tileMicMuted,
   tryAutoJoin,
   waitingRequests,
+  // [participants-agent] People-panel roster + host actions
+  ensurePeoplePanel,
+  lowerHand,
+  muteAll,
+  muteRosterParticipant,
+  pinParticipant,
+  removeParticipant,
+  scrapeRoster,
+  spotlightParticipant,
+  tilePinState,
+  type RosterEntry,
 } from './dom';
 import { installMediaShim } from './inject';
 import type { NativeNdi } from './native';
@@ -93,6 +105,7 @@ const sources = new Map<string, SourceTap>();
 const outputs = new Map<string, OutputPipeline>();
 const speaker = new SpeakerTracker();
 let router: AudioRouter | null = null;
+let deviceRouter: OutputDeviceRouter | null = null; // [audio-agent]
 
 // ---------------------------------------------------------------------------
 // join flow helpers
@@ -227,6 +240,7 @@ function syncOutputs(): void {
         recordDir: () => settings.recordDir || defaultRecordDir(),
         log,
         onPreview: sendPreview,
+        videoLoss: () => settings.videoLoss, // [effects-agent] loss delay + profile picture style
       });
       outputs.set(cfg.id, p);
     } else {
@@ -288,6 +302,8 @@ function routeOutputs(): void {
 
 /** Route meeting audio into the outputs (called every ~10 ms by the router). */
 function onAudio(mix: Float32Array, perTrack: Map<string, Float32Array>, n: number): void {
+  const outBufs = new Map<string, Float32Array>(); // [audio-agent]
+  const assigned = new Set<string>(); // [audio-agent]
   for (const cfg of settings.outputs) {
     if (cfg.audio === 'off') continue;
     const p = outputs.get(cfg.id);
@@ -302,9 +318,28 @@ function onAudio(mix: Float32Array, perTrack: Map<string, Float32Array>, n: numb
       // Single remote participant: their audio is the mix, attribution or not.
       if (!buf && eligible('camera').length === 1 && key) buf = mix;
       if (!buf) buf = new Float32Array(n * 2); // silence keeps the stream continuous
+      if (track) assigned.add(track); // [audio-agent]
     }
+    outBufs.set(cfg.id, buf); // [audio-agent]
     p.pushAudio(buf, 48000, 2, n);
   }
+  // [audio-agent] Audio tab → local output devices
+  deviceRouter?.process({
+    n,
+    mix,
+    perTrack,
+    outputs: outBufs,
+    assignedTracks: assigned,
+    speakerTrack: speaker.activeSpeaker ? speaker.audioTrackFor(speaker.activeSpeaker) : null,
+    participant: (key, name) => {
+      let k = key;
+      if (!sources.has(k) && name) k = [...sources.values()].find((s) => s.kind === 'camera' && s.displayName === name)?.key ?? key;
+      const t = speaker.audioTrackFor(k);
+      const b = t ? (perTrack.get(t) ?? null) : null;
+      if (!b && eligible('camera').length === 1 && eligible('camera')[0].key === k) return mix;
+      return b;
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +351,7 @@ function applySettings(): void {
   if (root) root.dataset.gmeetIsoMic = settings.micLabel || '';
   void botCam?.setSource(settings.camera);
   void router?.setMonitorDevice(settings.monitorDevice);
+  deviceRouter?.sync(settings); // [audio-agent]
   syncOutputs();
 }
 
@@ -371,6 +407,7 @@ async function tick(): Promise<void> {
 
     const live = phase === 'in-call';
     syncSources(live);
+    syncRoster(live); // [participants-agent]
     speaker.readRtc();
     speaker.update(eligible('camera').map((s) => s.key));
     if (ndi) routeOutputs();
@@ -386,6 +423,34 @@ async function tick(): Promise<void> {
     busy = false;
   }
 }
+
+// [participants-agent] Full roster from Meet's People panel (people without a tile, host/co-host, hands).
+let roster: RosterEntry[] = [];
+let rosterOpenTriedAt = 0;
+function syncRoster(live: boolean): void {
+  if (!live) {
+    roster = [];
+    return;
+  }
+  roster = scrapeRoster();
+  // Keep the People panel open so off-screen participants are listed (retry if e.g. chat replaced it).
+  if (!roster.length && Date.now() - rosterOpenTriedAt > 15000) {
+    rosterOpenTriedAt = Date.now();
+    if (ensurePeoplePanel()) log('Opened the People panel for the participant roster');
+  }
+}
+function rosterRef(ref: string): RosterEntry | null {
+  const base = ref.replace(/:screen$/, '');
+  return roster.find((r) => r.participantId === base) ?? roster.find((r) => r.displayName.toLowerCase() === ref.toLowerCase()) ?? null;
+}
+/** Resolve a Command participant ref (key or name) to Meet's participant id + name. */
+function personRef(ref: string): { id: string; name: string } | null {
+  const s = sourceByRef(ref);
+  if (s) return { id: s.participantId, name: s.displayName };
+  const r = rosterRef(ref);
+  return r ? { id: r.participantId, name: r.displayName } : null;
+}
+// [/participants-agent]
 
 let inCallSince = 0;
 function participants(): ParticipantState[] {
@@ -413,9 +478,55 @@ function participants(): ParticipantState[] {
         level: speaker.level(base),
         speaking: speaker.speaking(base),
         outputs: shownBy.get(s.key) ?? [],
+        // [participants-agent]
+        ...rosterExtras(s.kind === 'camera' ? rosterRef(s.participantId) : null, s.tile),
       };
-    });
+    })
+    .map((p) => (p.kind === 'camera' ? withRosterState(p) : p))
+    .concat(rosterOnly()); // [participants-agent]
 }
+
+// [participants-agent] roster → ParticipantState
+function rosterExtras(r: RosterEntry | null, tile: HTMLElement | null): Partial<ParticipantState> {
+  return {
+    isHost: r?.isHost ?? false,
+    isCohost: r?.isCohost ?? false,
+    avatarUrl: r?.avatarUrl || undefined,
+    ...(tile ? tilePinState(tile) : { pinned: false, spotlit: false }),
+  };
+}
+function withRosterState(p: ParticipantState): ParticipantState {
+  const r = rosterRef(p.participantId);
+  if (!r) return p;
+  return { ...p, muted: p.muted ?? r.muted, handRaised: p.handRaised || r.handRaised, isSelf: p.isSelf || r.isSelf };
+}
+function rosterOnly(): ParticipantState[] {
+  const have = new Set([...sources.values()].filter((s) => s.kind === 'camera').map((s) => s.participantId));
+  return roster
+    .filter((r) => !have.has(r.participantId))
+    .map((r) => ({
+      key: r.participantId,
+      participantId: r.participantId,
+      displayName: r.displayName,
+      kind: 'camera' as const,
+      isSelf: r.isSelf,
+      hasVideo: false,
+      width: 0,
+      height: 0,
+      fps: 0,
+      muted: r.muted,
+      handRaised: r.handRaised,
+      level: speaker.level(r.participantId),
+      speaking: speaker.speaking(r.participantId),
+      outputs: [],
+      isHost: r.isHost,
+      isCohost: r.isCohost,
+      avatarUrl: r.avatarUrl || undefined,
+      pinned: false,
+      spotlit: false,
+    }));
+}
+// [/participants-agent]
 
 function report(): void {
   const { phase, detail } = meetingPhase();
@@ -446,6 +557,8 @@ function report(): void {
     waiting: phase === 'in-call' ? waitingRequests() : [],
     rxMbps: Number(document.documentElement?.dataset.gmeetIsoRxMbps ?? 0),
     mixLevel: router?.mixPeak ?? 0,
+    audioOutputMeters: deviceRouter?.meters(), // [audio-agent]
+    audioOutputChannels: deviceRouter?.channelCounts(), // [audio-agent]
     updatedAt: Date.now(),
   };
   ipcRenderer.send(IPC.meetState, state);
@@ -493,8 +606,29 @@ async function runCommand(c: Command): Promise<unknown> {
       return denyWaiting(c.who);
     case 'muteParticipant': {
       const s = sourceByRef(c.participant);
-      return s?.tile ? muteParticipant(s.tile) : false;
+      if (s?.tile && (await muteParticipant(s.tile))) return true;
+      const r = personRef(c.participant); // [participants-agent] roster fallback
+      return r ? muteRosterParticipant(r.id) : false;
     }
+    // [participants-agent] host / view actions (Meet DOM automation)
+    case 'pin':
+    case 'spotlight':
+    case 'removeParticipant': {
+      const r = personRef(c.participant);
+      if (!r) throw new Error(`Could not find participant: ${c.participant}`);
+      if (c.cmd === 'pin') return pinParticipant(r.id, r.name, c.on);
+      if (c.cmd === 'spotlight') return spotlightParticipant(r.id, r.name, c.on);
+      return removeParticipant(r.id, r.name);
+    }
+    case 'lowerHand': {
+      if (!c.participant) return lowerHand();
+      const r = personRef(c.participant);
+      if (!r) throw new Error(`Could not find participant: ${c.participant}`);
+      return lowerHand(r.id, r.name);
+    }
+    case 'muteAll':
+      return muteAll();
+    // [/participants-agent]
     case 'applyLayout':
       return applyTiledLayout(settings.maxTiles);
     case 'setCam':
@@ -512,6 +646,7 @@ function disposeAll(): void {
   for (const s of sources.values()) s.dispose();
   sources.clear();
   router?.dispose();
+  deviceRouter?.dispose(); // [audio-agent]
   botCam?.dispose();
 }
 
@@ -562,6 +697,7 @@ if (isMeet) {
     getCamCanvas();
     botCam = new BotCamera(ndi?.Receiver ?? null, log);
     router = new AudioRouter(onAudio, log);
+    deviceRouter = new OutputDeviceRouter(log); // [audio-agent]
     void ipcRenderer.invoke(IPC.meetGetSettings).then((s: Settings) => {
       settings = s;
       applySettings();

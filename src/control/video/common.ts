@@ -1,19 +1,14 @@
 // Shared pieces for the Video Outputs views (grid / list / previews):
 // option builders, status readout, quick actions and the output ⋯ menu.
 
-import { FORMAT_PRESETS, type OutputConfig, type OutputMode, type OutputState, type ParticipantState } from '../../shared/types';
-import { button, confirmSheet, h, icon, menu, popover, promptSheet, textField, type OptList } from '../kit';
+import { EMBEDDED_AUDIO_OPTIONS, FORMAT_PRESETS, NOT_IN_MEET, OUTPUT_MODE_OPTIONS, type OutputConfig, type OutputMode, type OutputState, type ParticipantState } from '../../shared/types';
+import { confirmSheet, h, icon, menu, promptSheet, type OptList } from '../kit';
 import { api, inCall, outputState, run, store, updateOutput } from '../store';
 
-export const UNSUPPORTED = 'Not available with Google Meet';
+export const UNSUPPORTED = NOT_IN_MEET;
 
 // ---------------------------------------------------------------- mode
-export const MODE_OPTS: OptList = [
-  { value: 'participant', label: 'Participant' },
-  { value: 'activeSpeaker', label: 'Active Speaker' },
-  { value: 'screenshare', label: 'Screen Share' },
-  { value: 'auto', label: 'Auto' },
-];
+export const MODE_OPTS: OptList = OUTPUT_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
 
 export function setMode(cfg: OutputConfig, mode: OutputMode): void {
   const patch: Partial<OutputConfig> = { mode };
@@ -64,16 +59,16 @@ export function setSelection(cfg: OutputConfig, key: string): void {
 export function deviceModel(cfg: OutputConfig): { opts: OptList; value: string } {
   const displays = store.system?.displays ?? [];
   const opts: { value: string; label: string }[] = [{ value: 'ndi', label: 'NDI' }];
-  for (const d of displays) opts.push({ value: `d:${d.id}`, label: `NDI + ${d.label}${d.primary ? ' – Main' : ''}` });
+  for (const d of displays) opts.push({ value: `d:${d.id}`, label: `NDI + ${d.label}${d.primary ? ' (Main)' : ''}` });
   let value = 'ndi';
   if (cfg.display !== null && cfg.display !== undefined) {
     value = `d:${cfg.display}`;
     if (!displays.some((d) => d.id === cfg.display)) opts.push({ value, label: 'NDI + Display (disconnected)' });
   }
-  return { opts: [...opts, { group: 'Not available with Google Meet', options: [
-    { value: 'x-syphon', label: 'Syphon', disabled: true },
+  return { opts: [...opts, { group: NOT_IN_MEET, options: [
     { value: 'x-srt', label: 'SRT', disabled: true },
     { value: 'x-bmd', label: 'Blackmagic Desktop Video', disabled: true },
+    { value: 'x-syphon', label: 'Syphon', disabled: true },
     { value: 'x-aja', label: 'AJA', disabled: true },
   ] }], value };
 }
@@ -81,7 +76,7 @@ export function setDevice(cfg: OutputConfig, v: string): void {
   void updateOutput(cfg.id, { display: v.startsWith('d:') ? Number(v.slice(2)) : null });
 }
 
-export const FORMAT_OPTS: OptList = FORMAT_PRESETS.map((p, i) => ({ value: String(i), label: p.format ? p.label : 'Native' }));
+export const FORMAT_OPTS: OptList = FORMAT_PRESETS.map((p, i) => ({ value: String(i), label: p.label }));
 export function formatValue(cfg: OutputConfig): string {
   const f = cfg.format;
   const i = FORMAT_PRESETS.findIndex((p) => (p.format === null ? f === null : !!f && p.format.width === f.width && p.format.height === f.height && p.format.fpsN === f.fpsN && p.format.fpsD === f.fpsD));
@@ -92,11 +87,7 @@ export function setFormat(cfg: OutputConfig, v: string): void {
   if (p) void updateOutput(cfg.id, { format: p.format ? { ...p.format } : null });
 }
 
-export const AUDIO_OPTS: OptList = [
-  { value: 'off', label: 'Off' },
-  { value: 'iso', label: 'ISO' },
-  { value: 'mix', label: 'Mix' },
-];
+export const AUDIO_OPTS: OptList = EMBEDDED_AUDIO_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
 
 // ---------------------------------------------------------------- status readout
 export type StatusKind = 'ok' | 'warn' | 'none';
@@ -116,6 +107,7 @@ export function statusModel(cfg: OutputConfig, st: OutputState | undefined): { k
 /** Status line element with in-place update. */
 export function statusLine() {
   const ico = icon('checkCircle');
+  ico.classList.add('vo-st-ico');
   const txt = h('span');
   const el = h('span.status-line.vo-status', ico, txt);
   let lastKind = '';
@@ -143,61 +135,46 @@ export function sourceParticipant(st: OutputState | undefined): ParticipantState
   return p;
 }
 
-export function quickActions(getId: () => string, opts: { talk?: boolean; plain?: boolean } = {}) {
-  const mk = (name: string, title: string) => {
-    const b = h('button.icon-btn.vo-qa', { title }, icon(name)) as HTMLButtonElement;
-    if (opts.plain) b.classList.add('plain');
-    return b;
-  };
-  const mic = mk('mic', 'Mute participant');
-  const cam = mk('video', 'Turning video off for others is not available with Google Meet');
+export function quickActions(getId: () => string, opts: { talk?: boolean } = {}) {
+  const mk = (name: string, title: string) => h('button.icon-btn.vo-qa', { title }, icon(name)) as HTMLButtonElement;
+  const mic = mk('mic.outline', 'Mute participant');
+  const cam = mk('camera.outline', `Ask participant to start/stop video: ${UNSUPPORTED}`);
   cam.disabled = true;
-  const chat = mk('chat', 'Send chat message');
+  const chat = mk('chat.outline', `Private chat: ${UNSUPPORTED}`);
+  chat.disabled = true;
   mic.addEventListener('click', () => {
     const p = sourceParticipant(outputState(getId()));
     if (p) void run({ cmd: 'muteParticipant', participant: p.key });
   });
-  chat.addEventListener('click', () => openChat(chat, sourceParticipant(outputState(getId()))));
-  const talk = opts.talk ? (h('button.btn.sm.vo-talk', { title: `Talkback — ${UNSUPPORTED}`, disabled: true }, icon('headset'), 'Talk') as HTMLButtonElement) : null;
+  const talk = opts.talk
+    ? (h('button.btn.sm.vo-talk', { title: `Talkback: ${UNSUPPORTED}`, disabled: true }, icon('headset.fill'), 'Talk') as HTMLButtonElement)
+    : null;
   const el = h('span.vo-qas', mic, cam, chat, talk);
   return {
     el,
     set(st: OutputState | undefined) {
       const p = sourceParticipant(st);
-      const live = inCall();
       const muted = p?.muted === true;
-      mic.disabled = !live || !p || p.isSelf || p.muted !== false;
-      mic.title = !p ? 'No participant on this output' : muted ? `${p.displayName} is muted (Meet can't unmute others)` : p.muted === null ? 'Mic state unknown' : `Mute ${p.displayName} (requires host)`;
-      const want = muted ? 'micSlash' : 'mic';
+      mic.disabled = !inCall() || !p || p.isSelf || p.muted !== false;
+      mic.title = !p
+        ? 'Please assign a participant to the stream'
+        : muted
+          ? `${p.displayName} is muted. Unmuting others: ${UNSUPPORTED}`
+          : p.muted === null ? 'Mic state unknown' : `Mute ${p.displayName} (requires host)`;
+      const want = muted ? 'mic.slash.outline' : 'mic.outline';
       if (mic.dataset.ico !== want) {
         mic.dataset.ico = want;
-        mic.querySelector('.ico')!.innerHTML = icon(want).innerHTML;
+        mic.replaceChildren(icon(want));
       }
       mic.classList.toggle('muted', muted);
       const vidOff = !!p && p.kind === 'camera' && !p.hasVideo;
-      cam.classList.toggle('muted', vidOff);
-      chat.disabled = !live;
+      const wantCam = vidOff ? 'camera.slash.outline' : 'camera.outline';
+      if (cam.dataset.ico !== wantCam) {
+        cam.dataset.ico = wantCam;
+        cam.replaceChildren(icon(wantCam));
+      }
     },
   };
-}
-
-function openChat(anchor: HTMLElement, p: ParticipantState | undefined): void {
-  const tf = textField('', () => {}, { placeholder: 'Message everyone' });
-  tf.el.style.width = '100%';
-  const send = async () => {
-    const text = tf.el.value.trim();
-    if (!text) return;
-    const ok = await run({ cmd: 'chat', text });
-    if (ok) close();
-  };
-  tf.el.addEventListener('keydown', (e) => e.key === 'Enter' && void send());
-  const body = h('div.vo-chat',
-    h('div', { style: 'font-weight:600' }, 'Send to everyone'),
-    h('div.caption', p ? `Google Meet can't send private messages; ${p.displayName} and everyone else in the call will see this.` : 'Google Meet only supports messages to everyone in the call.'),
-    tf.el,
-    h('div', { style: 'display:flex;justify-content:flex-end' }, button('Send', () => void send(), 'primary')));
-  const close = popover(anchor, body, { width: 280 });
-  setTimeout(() => tf.el.focus(), 0);
 }
 
 // ---------------------------------------------------------------- output actions
@@ -220,7 +197,7 @@ export async function renameOutput(cfg: OutputConfig): Promise<void> {
 }
 
 export async function deleteOutput(cfg: OutputConfig): Promise<void> {
-  if (await confirmSheet(`Delete “${cfg.name}”?`, 'The NDI source will stop and this output’s settings will be removed.', 'Delete', true)) {
+  if (await confirmSheet(`Are you sure you want to delete "${cfg.name}"?`, 'The NDI source will stop and this output’s settings will be removed.', 'Delete', true)) {
     await run({ cmd: 'deleteOutput', output: cfg.id });
   }
 }
@@ -230,10 +207,10 @@ export function outputMenu(anchor: HTMLElement, getCfg: () => OutputConfig | und
   if (!cfg) return;
   menu(anchor, [
     { label: 'Duplicate', icon: 'copy', onClick: () => void duplicateOutput(cfg) },
-    { label: 'Rename…', icon: 'pencil', onClick: () => void renameOutput(cfg) },
-    { label: 'Output Effects…', icon: 'sliders', onClick: () => openEffects(cfg.id) },
+    { label: 'Rename', icon: 'pencil', onClick: () => void renameOutput(cfg) },
+    { label: 'Output Effects', icon: 'sliders', onClick: () => openEffects(cfg.id) },
     null,
-    { label: 'Delete', icon: 'trash', destructive: true, onClick: () => void deleteOutput(cfg) },
+    { label: 'Delete output', icon: 'trash', destructive: true, onClick: () => void deleteOutput(cfg) },
   ]);
 }
 

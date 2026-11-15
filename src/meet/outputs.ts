@@ -4,11 +4,17 @@
 //   - canvas (fixed format and/or effects): draw at a fixed cadence into an OffscreenCanvas
 //     (letterbox/scale, colour, crop/zoom, mirror, name tag) and read back BGRA.
 // When the source has no video, the slot renders its loss mode (black/freeze/transparent/
-// image/testcard) so downstream switchers always see a stable signal.
+// image/testcard/profilePicture) so downstream switchers always see a stable signal, after
+// the global video-loss delay (hold the last frame until then).
+// Effects (RE ProcAmp) render through the shared WebGL2 pipeline in control/effects/fxgl.ts
+// (the same code the Output Effects preview uses); overlays through control/effects/overlays.ts.
 
 import * as fs from 'fs';
-import type { EngineState, OutputConfig, OutputState } from '../shared/types';
-import { DEFAULT_EFFECTS } from '../shared/types';
+import type { EngineState, GlobalVideoLossSettings, OutputConfig, OutputEffects, OutputState, VideoLossSettings } from '../shared/types';
+import { DEFAULT_EFFECTS, DEFAULT_VIDEO_LOSS, VIDEO_LOSS_DELAY_MS } from '../shared/types';
+import { FxRenderer, fullEffects, isIdentityCurve } from '../control/effects/fxgl';
+import { drawOverlays } from '../control/effects/overlays';
+import { AutoCropTracker, autoCropSupported } from '../control/effects/autocrop';
 import { Thumbnailer } from './camsource';
 import type { NativeNdi, NativeSender } from './native';
 import type { SourceTap } from './sources';
@@ -16,19 +22,65 @@ import { Recorder } from './recorder';
 
 const LOSS_FPS = 10;
 
+/** Numeric ProcAmp fields that are neutral at their DEFAULT_EFFECTS value. */
+const NEUTRAL_KEYS: (keyof OutputEffects)[] = [
+  'brightness', 'contrast', 'saturation', 'hue', 'zoom', 'panX', 'panY',
+  'exposure', 'vibrance', 'sharpness', 'temperature', 'tint', 'highlights', 'shadows', 'vignette',
+  'liftR', 'liftG', 'liftB', 'gammaR', 'gammaG', 'gammaB', 'gainR', 'gainG', 'gainB',
+  'cropLeft', 'cropRight', 'cropTop', 'cropBottom', 'whiteBalanceK', 'cropZoom', 'cropPanX', 'cropPanY', 'cropRotation',
+];
+
 function effectsActive(cfg: OutputConfig): boolean {
-  const e = cfg.effects ?? DEFAULT_EFFECTS;
+  const e = fullEffects(cfg.effects);
+  for (const k of NEUTRAL_KEYS) {
+    const v = e[k] as number | undefined;
+    const d = DEFAULT_EFFECTS[k] as number | undefined;
+    if (typeof v === 'number' && typeof d === 'number' && Math.abs(v - d) > 1e-6) return true;
+  }
   return (
-    e.brightness !== 1 ||
-    e.contrast !== 1 ||
-    e.saturation !== 1 ||
-    e.hue !== 0 ||
-    e.zoom !== 1 ||
-    e.panX !== 0 ||
-    e.panY !== 0 ||
     e.mirror ||
-    e.nameTag
+    e.nameTag ||
+    (e.padBlack === false && !!cfg.format) ||
+    !isIdentityCurve(e.toneCurve) ||
+    (e.images ?? []).some((i) => i.visible) ||
+    (!!cfg.autoCropEnabled && autoCropSupported())
   );
+}
+
+/** Meet avatars (profilePicture loss mode): fetched once per URL into an untainted bitmap. */
+const avatarCache = new Map<string, ImageBitmap | null | 'loading'>();
+function avatarFor(url: string): ImageBitmap | null {
+  const hit = avatarCache.get(url);
+  if (hit === undefined) {
+    avatarCache.set(url, 'loading');
+    void (async () => {
+      try {
+        const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
+        if (!r.ok) throw new Error(String(r.status));
+        avatarCache.set(url, await createImageBitmap(await r.blob()));
+      } catch {
+        avatarCache.set(url, null);
+      }
+    })();
+    return null;
+  }
+  return hit === 'loading' ? null : hit;
+}
+
+function initialsOf(name: string): string {
+  const parts = name.replace(/\(.*?\)/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const a = parts[0][0] ?? '';
+  const b = parts.length > 1 ? (parts[parts.length - 1][0] ?? '') : '';
+  return (a + b).toUpperCase();
+}
+
+/** Stable per-name colour (Meet-like palette) for initials when not overridden. */
+function colourFor(name: string): string {
+  const pal = ['#1a73e8', '#e8710a', '#188038', '#d93025', '#9334e6', '#12b5cb', '#e52592', '#f9ab00', '#5f6368', '#a142f4'];
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return pal[h % pal.length];
 }
 
 /** Loss-mode images: decoded once, then drawn synchronously. */
@@ -59,6 +111,8 @@ export interface OutputEnv {
   recordDir: () => string;
   log: (s: string) => void;
   onPreview: (key: string, jpeg: ArrayBuffer) => void;
+  /** [effects-agent] Global video-loss settings (delay, profile picture style, per-output overrides). */
+  videoLoss?: () => GlobalVideoLossSettings;
 }
 
 export class OutputPipeline {
@@ -102,6 +156,11 @@ export class OutputPipeline {
   private cycle = 0;
   private cycleT0 = 0;
   private thumb = new Thumbnailer(320);
+  /** Unprocessed source preview (`raw:<id>`) for the Output Effects window's live preview. */
+  private rawThumb = new Thumbnailer(640);
+  private fx: FxRenderer | null = null;
+  private fxFailed = false;
+  private tracker: AutoCropTracker | null = null;
   private recorder: Recorder | null = null;
 
   // audio delay line
@@ -272,6 +331,7 @@ export class OutputPipeline {
       else this.lastPass = { buf: this.lastPass?.buf ?? new ArrayBuffer(0), w, h, fmt: ndiFmt, stride: layout[0].stride };
       this.noteOut(w, h, arrivedAt);
       this.recorder?.video(frame, w, h);
+      void this.rawThumb.maybe(frame, w, h, Math.min(15, this.env.previewFps())).then((j) => j && this.env.onPreview(`raw:${this.cfg.id}`, j));
       void this.thumb.maybe(frame, w, h, this.env.previewFps()).then((j) => j && this.env.onPreview(this.cfg.id, j));
     } catch (e) {
       this.env.log(`[${this.cfg.name}] passthrough error: ${(e as Error).message}`);
@@ -284,8 +344,10 @@ export class OutputPipeline {
 
   private passthroughLossTick(): void {
     if (!this.sender) return this.ensureSender();
-    const sourceLive = this.source?.live && this.engine === 'enabled';
+    const sourceLive = this.sourceLive() && this.engine === 'enabled';
     if (sourceLive) return;
+    // Inside the video-loss delay: send nothing, so receivers hold the last frame.
+    if (this.engine === 'enabled' && this.inLossDelay() && this.lastPass) return;
     // Freeze: keep re-sending the last good frame.
     if (this.cfg.lossMode === 'freeze' && this.lastPass?.buf.byteLength && this.engine === 'enabled') {
       const p = this.lastPass;
@@ -296,7 +358,7 @@ export class OutputPipeline {
     const w = this.lastPass?.w || this.source?.width || 1280;
     const h = this.lastPass?.h || this.source?.height || 720;
     this.setupCanvas(w - (w % 2), h - (h % 2));
-    const key = `ploss:${this.cfg.lossMode}:${this.cfg.lossImage}:${this.cfgVersion}:${this.cfg.lossMode === 'testcard' ? Math.floor(Date.now() / 1000) : 0}`;
+    const key = `p${this.lossKey()}`;
     const W = this.canvas!.width;
     const H = this.canvas!.height;
     if (this.cache && this.cache.key === key && this.cache.w === W && this.cache.h === H) {
@@ -332,18 +394,21 @@ export class OutputPipeline {
     const ctx = this.ctx;
     if (!ctx || !this.canvas) return;
     const cur = this.engine === 'enabled' ? this.source?.current() : null;
-    const live = !!cur && !!this.source?.live;
+    const live = !!cur && this.sourceLive();
     const f = this.cfg.format ?? { width: this.canvas.width, height: this.canvas.height, fpsN: 30000, fpsD: 1001 };
     const W = this.canvas.width;
     const H = this.canvas.height;
     // What would this tick show? If identical to the cached frame, just re-send it: sources
     // usually arrive slower than the output rate, and loss content is static.
-    const freeze = !live && this.cfg.lossMode === 'freeze' && this.hasDrawnSource && this.engine === 'enabled';
+    // Freeze mode, or still inside the video-loss delay: hold the last source frame.
+    const hold = !live && this.hasDrawnSource && this.engine === 'enabled' && (this.cfg.lossMode === 'freeze' || this.inLossDelay());
+    const freeze = hold;
+    const tracking = live && !!this.tracker;
     const key = live
-      ? `src:${cur!.at}:${this.sourceName}:${this.cfgVersion}`
+      ? `src:${cur!.at}:${this.sourceName}:${this.cfgVersion}:${tracking ? performance.now() : 0}`
       : freeze
         ? (this.cache?.key ?? 'freeze')
-        : `loss:${this.cfg.lossMode}:${this.cfg.lossImage}:${this.cfgVersion}:${this.cfg.lossMode === 'testcard' ? Math.floor(Date.now() / 1000) : 0}:${this.cfg.lossMode === 'image' && !imageFor(this.cfg.lossImage) ? 'pending' : 'ok'}`;
+        : this.lossKey();
     // A readback still in flight will send this slot's frame when it completes.
     if (this.readbackBusy) return;
     if (this.cache && this.cache.key === key && this.cache.w === W && this.cache.h === H) {
@@ -358,6 +423,7 @@ export class OutputPipeline {
       this.drawSource(cur.frame);
       this.hasDrawnSource = true;
       arrivedAt = cur.at;
+      this.rawPreview(cur.frame);
     } else if (!freeze) {
       this.drawLoss();
     }
@@ -368,23 +434,56 @@ export class OutputPipeline {
     const ctx = this.ctx!;
     const W = this.canvas!.width;
     const H = this.canvas!.height;
-    const e = { ...DEFAULT_EFFECTS, ...(this.cfg.effects ?? {}) };
+    const e = fullEffects(this.cfg.effects);
     const sw = frame.displayWidth;
     const sh = frame.displayHeight;
+    // Auto-crop (face tracking), when the Shape Detection API is available.
+    const wantTrack = !!this.cfg.autoCropEnabled && autoCropSupported();
+    if (wantTrack && !this.tracker) this.tracker = new AutoCropTracker();
+    if (!wantTrack) this.tracker = null;
+    const auto = this.tracker?.supported ? this.tracker.update(frame, sw, sh, W / H, this.cfg) : null;
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
+    ctx.filter = 'none';
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    // Fit (contain), then zoom about the centre and pan.
-    const fit = Math.min(W / sw, H / sh) * Math.max(0.1, e.zoom);
+    let ok = false;
+    if (!this.fxFailed) {
+      try {
+        this.fx ??= new FxRenderer();
+        ok = this.fx.render(frame, sw, sh, W, H, e, { auto });
+        if (ok) ctx.drawImage(this.fx.canvas, 0, 0);
+        else if (this.fx.failed) {
+          this.fxFailed = true;
+          this.env.log(`[${this.cfg.name}] WebGL effects unavailable; using the 2D fallback`);
+        }
+      } catch (err) {
+        this.fxFailed = true;
+        this.env.log(`[${this.cfg.name}] WebGL effects error: ${(err as Error).message}`);
+      }
+    }
+    if (!ok) this.drawSource2d(frame, e);
+    ctx.restore();
+    drawOverlays(ctx, W, H, e, this.sourceName, (img) => imageFor(img.path));
+  }
+
+  /** 2D fallback (no WebGL2): fit/zoom/pan/mirror + CSS colour filters only. */
+  private drawSource2d(frame: VideoFrame, e: OutputEffects): void {
+    const ctx = this.ctx!;
+    const W = this.canvas!.width;
+    const H = this.canvas!.height;
+    const sw = frame.displayWidth;
+    const sh = frame.displayHeight;
+    const fit = Math.min(W / sw, H / sh) * Math.max(0.1, e.zoom) * Math.max(0.1, e.cropZoom ?? 1);
     const dw = sw * fit;
     const dh = sh * fit;
     const maxPanX = Math.max(0, (dw - W) / 2);
     const maxPanY = Math.max(0, (dh - H) / 2);
-    const dx = (W - dw) / 2 - e.panX * maxPanX;
-    const dy = (H - dh) / 2 - e.panY * maxPanY;
+    const dx = (W - dw) / 2 - e.panX * maxPanX - (e.cropPanX ?? 0) * (dw / 2);
+    const dy = (H - dh) / 2 - e.panY * maxPanY - (e.cropPanY ?? 0) * (dh / 2);
     const filters: string[] = [];
-    if (e.brightness !== 1) filters.push(`brightness(${e.brightness})`);
+    const b = e.brightness * Math.pow(2, (e.exposure ?? 0) * 2);
+    if (b !== 1) filters.push(`brightness(${b})`);
     if (e.contrast !== 1) filters.push(`contrast(${e.contrast})`);
     if (e.saturation !== 1) filters.push(`saturate(${e.saturation})`);
     if (e.hue !== 0) filters.push(`hue-rotate(${e.hue}deg)`);
@@ -394,42 +493,64 @@ export class OutputPipeline {
       ctx.scale(-1, 1);
     }
     ctx.drawImage(frame, e.mirror ? W - dx - dw : dx, dy, dw, dh);
-    ctx.restore();
-    if (e.nameTag) this.drawNameTag(e.nameTagText || this.sourceName, e.nameTagSubtitle, e.nameTagPosition);
+    ctx.filter = 'none';
   }
 
-  private drawNameTag(title: string, subtitle: string, pos: string): void {
-    if (!title) return;
-    const ctx = this.ctx!;
-    const W = this.canvas!.width;
-    const H = this.canvas!.height;
-    const size = Math.round(H * 0.045);
-    const sub = Math.round(size * 0.7);
-    ctx.save();
-    ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
-    const tw = ctx.measureText(title).width;
-    ctx.font = `400 ${sub}px "Segoe UI", system-ui, sans-serif`;
-    const sw = subtitle ? ctx.measureText(subtitle).width : 0;
-    const pad = Math.round(size * 0.55);
-    const boxW = Math.max(tw, sw) + pad * 2;
-    const boxH = size + (subtitle ? sub + size * 0.25 : 0) + pad * 1.2;
-    const margin = Math.round(H * 0.05);
-    const x = pos.endsWith('r') ? W - margin - boxW : margin;
-    const y = pos.startsWith('t') ? margin : H - margin - boxH;
-    ctx.fillStyle = 'rgba(10,12,16,0.78)';
-    ctx.fillRect(x, y, boxW, boxH);
-    ctx.fillStyle = '#3b82f6';
-    ctx.fillRect(x, y, Math.max(4, size * 0.12), boxH);
-    ctx.fillStyle = '#fff';
-    ctx.textBaseline = 'top';
-    ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
-    ctx.fillText(title, x + pad, y + pad * 0.6);
-    if (subtitle) {
-      ctx.fillStyle = '#c9d1dc';
-      ctx.font = `400 ${sub}px "Segoe UI", system-ui, sans-serif`;
-      ctx.fillText(subtitle, x + pad, y + pad * 0.6 + size * 1.15);
+  // ---------------- video loss ----------------
+  /** Loss settings in force for this output (global, or the per-output override). */
+  private lossSettings(): VideoLossSettings & { delayMs: number } {
+    const g = this.env.videoLoss?.();
+    const base: VideoLossSettings = g ? (g.perOutputVideoLossEnabled && this.cfg.videoLoss ? { ...DEFAULT_VIDEO_LOSS, ...this.cfg.videoLoss } : g) : DEFAULT_VIDEO_LOSS;
+    return { ...DEFAULT_VIDEO_LOSS, ...base, delayMs: g ? (VIDEO_LOSS_DELAY_MS[g.delay] ?? 1000) : 1000 };
+  }
+
+  /** Source delivering frames, within the loss delay (capped at the tap's own 1 s staleness). */
+  private sourceLive(): boolean {
+    const src = this.source;
+    if (!src || !src.current()) return false;
+    const age = performance.now() - src.lastFrameAt;
+    return age < Math.min(1000, this.lossSettings().delayMs);
+  }
+
+  /** Video stopped, but not for longer than the configured video-loss delay. */
+  private inLossDelay(): boolean {
+    const src = this.source;
+    if (!src || !src.lastFrameAt) return false;
+    return performance.now() - src.lastFrameAt < this.lossSettings().delayMs;
+  }
+
+  private lossKey(): string {
+    const vl = this.lossSettings();
+    const mode = this.cfg.lossMode;
+    let extra = '';
+    if (mode === 'image') extra = imageFor(this.cfg.lossImage) ? 'ok' : 'pending';
+    if (mode === 'profilePicture') {
+      const url = this.avatarUrl();
+      extra = `${this.sourceName}:${url}:${url && avatarFor(url) ? 'ok' : 'pending'}`;
     }
-    ctx.restore();
+    return `loss:${mode}:${this.cfg.lossImage}:${this.cfgVersion}:${mode === 'testcard' ? Math.floor(Date.now() / 1000) : 0}:${extra}:${JSON.stringify(vl)}`;
+  }
+
+  /** The participant's Meet avatar <img> in their tile, if any. */
+  private avatarUrl(): string {
+    const tile = this.source?.tile;
+    if (!tile) return this.lastAvatar;
+    for (const img of Array.from(tile.querySelectorAll('img'))) {
+      const src = (img as HTMLImageElement).src;
+      if (/googleusercontent\.com|\/photo/.test(src) && (img as HTMLImageElement).naturalWidth >= 32) {
+        this.lastAvatar = src;
+        return src;
+      }
+    }
+    return this.lastAvatar;
+  }
+  private lastAvatar = '';
+
+  /** Send the unprocessed source to the Output Effects window (key `raw:<id>`). */
+  private rawPreview(frame: VideoFrame): void {
+    void this.rawThumb
+      .maybe(frame, frame.displayWidth, frame.displayHeight, Math.min(15, this.env.previewFps()))
+      .then((j) => j && this.env.onPreview(`raw:${this.cfg.id}`, j));
   }
 
   private drawLoss(): void {
@@ -455,11 +576,72 @@ export class OutputPipeline {
       case 'testcard':
         this.drawTestcard();
         break;
+      case 'profilePicture':
+        this.drawProfilePicture();
+        break;
       default:
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, W, H);
     }
     ctx.restore();
+    const vl = this.lossSettings();
+    if (vl.displayOutputNameOnImage && (this.cfg.lossMode === 'image' || this.cfg.lossMode === 'profilePicture' || this.cfg.lossMode === 'black')) {
+      ctx.save();
+      const size = Math.round(H * 0.04);
+      ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const pad = size * 0.5;
+      const tw = ctx.measureText(this.cfg.name).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(H * 0.03, H * 0.03, tw + pad * 2, size + pad * 1.4);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(this.cfg.name, H * 0.03 + pad, H * 0.03 + pad * 0.7);
+      ctx.restore();
+    }
+  }
+
+  /** RE profilePicture loss mode: avatar (or initials) in a circle on a coloured background. */
+  private drawProfilePicture(): void {
+    const ctx = this.ctx!;
+    const W = this.canvas!.width;
+    const H = this.canvas!.height;
+    const vl = this.lossSettings();
+    const name = this.sourceName || this.cfg.name;
+    ctx.fillStyle = vl.profilePictureBackgroundColor || '#222222';
+    ctx.fillRect(0, 0, W, H);
+    const d = Math.round(H * Math.max(0.05, Math.min(0.95, vl.profilePictureSize || 0.4)));
+    const cx = W / 2;
+    const cy = H / 2 - (vl.profilePictureShowName ? H * 0.05 : 0);
+    const url = vl.profilePictureForceInitials ? '' : this.avatarUrl();
+    const bmp = url ? avatarFor(url) : null;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, d / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    if (bmp) {
+      ctx.clip();
+      const s = Math.max(d / bmp.width, d / bmp.height);
+      ctx.drawImage(bmp, cx - (bmp.width * s) / 2, cy - (bmp.height * s) / 2, bmp.width * s, bmp.height * s);
+    } else {
+      ctx.fillStyle = vl.profilePictureOverrideInitialsBgColor ? vl.profilePictureInitialsBgColor : colourFor(name);
+      ctx.fill();
+      ctx.fillStyle = vl.profilePictureInitialsColor || '#ffffff';
+      ctx.font = `500 ${Math.round(d * 0.4)}px "Segoe UI", "Google Sans", system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(initialsOf(name), cx, cy + d * 0.02);
+    }
+    ctx.restore();
+    if (vl.profilePictureShowName && name) {
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `500 ${Math.round(H * 0.045)}px "Segoe UI", "Google Sans", system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(name, cx, cy + d / 2 + H * 0.04);
+      ctx.restore();
+    }
   }
 
   private drawTestcard(): void {
@@ -600,7 +782,7 @@ export class OutputPipeline {
     const now = performance.now();
     while (this.outTimes.length && now - this.outTimes[0] > 1000) this.outTimes.shift();
     const st = this.sender?.stats();
-    const live = !!this.source?.live;
+    const live = this.sourceLive() || (this.inLossDelay() && (this.hasDrawnSource || !!this.lastPass));
     const status = !this.active ? 'off' : this.engine === 'standby' ? 'standby' : live ? 'live' : 'loss';
     return {
       id: this.cfg.id,

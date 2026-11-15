@@ -1,1 +1,103 @@
-/* meeting tab styles (owned by the meeting task). */
+/* Meeting tab — ZoomISO v3 MeetingTab (page08_img01.png). */
+
+/* The Meeting tab has no Return Feed bar in ZoomISO: its own footer sits at the bottom. */
+body[data-tab="meeting"] .bottombar { display: none; }
+
+.meeting-tab { background: var(--window-bg); }
+.mt-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 60px; padding: 20px; overflow: auto; }
+
+/* MeetingButtonGroup: 2×2 grid of 80px tiles */
+.mt-buttons { display: grid; grid-template-columns: repeat(2, 82px); gap: 22px 60px; }
+.mt-button { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: 0; padding: 0; color: var(--text); font: 500 var(--fs) var(--font); cursor: default; white-space: nowrap; }
+.mt-tile { width: 80px; height: 80px; border-radius: 20px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.35); }
+.mt-tile.orange { background: #FF8B2D; }
+.mt-tile.blue { background: #0E72ED; }
+.mt-tile .ico { width: 38px; height: 38px; font-size: 38px; }
+.mt-tile .ico svg { width: 38px; height: 38px; }
+.mt-button:hover:not(:disabled) .mt-tile { filter: brightness(1.08); }
+.mt-button:active:not(:disabled) .mt-tile { filter: brightness(.9); }
+.mt-button:disabled { color: var(--text-3); }
+.mt-button:disabled .mt-tile { filter: saturate(.35) brightness(.6); }
+
+/* MeetingPreviewAndControls card */
+.mt-panel { width: 460px; flex: none; padding: 28px 30px 26px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(255,255,255,.015); display: flex; flex-direction: column; gap: 8px; }
+.mt-status { font-size: var(--fs-sm); font-weight: 500; margin-bottom: -2px; }
+.mt-status.out { color: var(--fill-global-error, #ff453a); }
+.mt-status.in { color: var(--fill-global-success, #30d158); }
+.mt-status.joining { color: var(--orange); }
+.mt-panel-btns { display: flex; gap: 8px; }
+.btn.mt-small { height: 22px; padding: 0 12px; font-size: var(--fs); background: var(--button-bg); }
+.btn.mt-small .ico { width: 13px; height: 13px; font-size: 13px; margin-right: 6px; }
+.mt-btn-inner { display: inline-flex; align-items: center; }
+.mt-preview { position: relative; height: 225px; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 2px 0 4px; }
+.mt-preview img { width: 100%; height: 100%; object-fit: contain; }
+.mt-preview-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; white-space: pre-line; font-size: var(--fs-xs); font-weight: 500; color: var(--text-2); pointer-events: none; }
+.mt-row { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.mt-row-label { flex: none; font-size: var(--fs); color: var(--text); white-space: nowrap; }
+.mt-row .popup { flex: 1; min-width: 0; height: 24px; }
+.mt-refresh { flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--text-2); display: flex; align-items: center; justify-content: center; cursor: default; }
+.mt-refresh:hover { color: var(--text); }
+.mt-refresh .ico { width: 14px; height: 14px; }
+
+/* In-meeting controls */
+.mt-inmeeting { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--sep); }
+.mt-inbtns { display: flex; gap: 8px; }
+.mt-inbtn { flex: 1; height: 26px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: var(--r-sm, 5px); background: var(--button-bg); color: var(--text); font: 500 var(--fs) var(--font); cursor: default; }
+.mt-inbtn .ico { width: 14px; height: 14px; font-size: 14px; }
+.mt-inbtn.off { color: var(--fill-global-error, #ff453a); }
+.mt-inbtn.leave { background: var(--fill-global-error, #e5483d); color: #fff; }
+.mt-inbtn:hover:not(:disabled) { filter: brightness(1.12); }
+.mt-inbtn:disabled { color: var(--text-3); }
+.mt-chat { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mt-chat .btn { flex: 1; }
+.mt-chat .field { flex: 1 1 100%; min-width: 0; height: 24px; }
+
+/* Footer */
+.mt-footer { flex: none; display: flex; justify-content: space-between; align-items: center; padding: 0 16px 14px; font-size: var(--fs-sm); color: var(--text); }
+.mt-footer .link { color: var(--fill-primary, #4793F1); cursor: pointer; }
+
+/* Join Meeting sheet */
+.mt-join-sheet { width: 420px; }
+.mt-join-sheet h3 { margin-bottom: 12px; }
+.mt-sheet-tabs { width: 100%; margin-bottom: 14px; }
+.mt-sheet-tabs button { flex: 1; }
+.mt-sheet-tabs button.na { color: var(--text-3); }
+.mt-form { display: flex; flex-direction: column; gap: 10px; min-height: 64px; }
+.mt-form-row { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 10px; }
+.mt-form-row > span:first-child { text-align: right; color: var(--text); }
+.mt-form-row .field { width: 100%; }
+.mt-sheet-disabled { color: var(--text-3); padding: 12px 0; text-align: center; }
+.mt-sheet-error { min-height: 16px; margin: 8px 0 4px; color: var(--fill-global-error, #ff453a); font-size: var(--fs-sm); }
+
+/* Splash (signed out) */
+.splash { position: fixed; inset: 0; z-index: 900; display: flex; flex-direction: column; background: linear-gradient(180deg, var(--splash-screen-top-iso, #75E073), var(--splash-screen-bottom-iso, #1A6333)); overflow: hidden; }
+.splash[hidden] { display: none; }
+.splash-deco { position: absolute; top: -10%; bottom: -10%; width: 260px; border: 70px solid rgba(255,255,255,.035); border-radius: 0 0 200px 0; pointer-events: none; }
+.splash-deco.l { left: -40px; border-left: 0; border-top: 0; }
+.splash-deco.r { right: -160px; top: 55%; transform: rotate(-35deg); border-right: 0; border-bottom: 0; border-radius: 200px 0 0 0; }
+.splash-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; color: #fff; text-align: center; }
+.splash-logo { width: 120px; height: 120px; margin-bottom: 14px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
+.splash-name { display: flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 700; margin-bottom: 22px; }
+.beta-badge { font-size: 12px; font-weight: 700; letter-spacing: .3px; padding: 2px 8px; border-radius: 10px; background: #1F6B3A; color: #fff; }
+.splash-sub { font-size: 16px; font-weight: 500; line-height: 22px; margin-bottom: 20px; }
+.splash-btn { width: 200px; height: 38px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 6px; background: #1F6B3A; color: #fff; font: 600 var(--fs) var(--font); cursor: default; }
+.splash-btn:hover { background: #237a42; }
+.splash-btn .ico { width: 16px; height: 16px; }
+.splash .mt-footer { color: #fff; }
+.splash .mt-footer .link { color: #fff; }
+
+/* Configure Recording popover (page07_img02.png) — loaded with the main window. */
+.rec-pop { display: flex; flex-direction: column; gap: 10px; padding: 2px 2px 0; }
+.rec-title { font-size: var(--fs); font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.rec-row { display: flex; gap: 8px; }
+.btn.rec-sm { height: 26px; padding: 0 8px; font-size: var(--fs-xs); background: #5a5a5a; }
+.btn.rec-md { height: 28px; padding: 0 10px; background: #5a5a5a; }
+.rec-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.rec-toggle { font-size: var(--fs); font-weight: 500; color: var(--text); }
+.rec-toggle input { width: 15px; height: 15px; }
+.rec-empty { color: var(--text-3); }
+.rec-div { border: 0; border-top: 1px solid rgba(255,255,255,.14); margin: 2px 0; }
+.rec-warn { color: var(--orange); font-size: var(--fs-sm); }
+.btn.rec-start { height: 28px; width: 100%; background: #C8392B; color: #fff; font-weight: 500; }
+.btn.rec-start:hover:not(:disabled) { background: #d8463a; }
+.btn.rec-start:disabled { background: #6a2a24; color: rgba(255,255,255,.5); opacity: 1; }

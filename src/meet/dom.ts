@@ -483,3 +483,281 @@ export async function denyWaiting(who?: string): Promise<number> {
   }
   return n;
 }
+
+// ---------------------------------------------------------------------------
+// People panel roster + host actions (validated against live Meet, Nov 2026 UI)
+//
+// The People panel (side panel, role=list aria-label="Participants") lists everyone in
+// the call, including people without a rendered tile. Each row is
+// [role=listitem][data-participant-id][aria-label=<name>] with an <img> avatar, a role
+// line ("Meeting host" / "Co-host"), a mic indicator and a "More actions" menu
+// (Pin to the screen, Add as co-host, Remove from the call, ...).
+// ---------------------------------------------------------------------------
+
+export interface RosterEntry {
+  participantId: string;
+  displayName: string;
+  isSelf: boolean;
+  isHost: boolean;
+  isCohost: boolean;
+  avatarUrl: string;
+  /** null = unknown (e.g. no indicator for unmuted people when the bot isn't host). */
+  muted: boolean | null;
+  handRaised: boolean;
+  el: HTMLElement;
+}
+
+const ROSTER_ROW = '[role="list"][aria-label="Participants" i] [role="listitem"][data-participant-id]';
+
+function labelledText(el: Element): string {
+  const ids = (el.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+  return cleanName(ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ') || el.getAttribute('aria-label') || '');
+}
+
+/** Toolbar "People" button (a role=button labelled by a hidden span "People"). */
+function peopleButton(): HTMLElement | null {
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('[role="button"], button'))) {
+    if (/^(people|show everyone|participants)\b/i.test(labelledText(b)) && isVisible(b)) return b;
+  }
+  return null;
+}
+
+export function rosterOpen(): boolean {
+  return !!document.querySelector('[role="list"][aria-label="Participants" i]');
+}
+
+/** Open the People panel if no roster is in the DOM (returns true if it is/was opened). */
+export function ensurePeoplePanel(): boolean {
+  if (rosterOpen()) return true;
+  const b = peopleButton();
+  if (!b) return false;
+  b.click();
+  return true;
+}
+
+function rowMuted(row: HTMLElement): boolean | null {
+  for (const e of Array.from(row.querySelectorAll<HTMLElement>('[aria-label]'))) {
+    const l = e.getAttribute('aria-label') ?? '';
+    if (/can't unmute|cannot unmute|microphone is (turned )?off|is muted/i.test(l)) return true;
+    if (/^mute .*microphone|microphone is on/i.test(l)) return false;
+  }
+  return null;
+}
+
+function rowHandRaised(row: HTMLElement): boolean {
+  if (row.querySelector('[aria-label*="lower" i][aria-label*="hand" i], [aria-label*="raised" i][aria-label*="hand" i]')) return true;
+  if (/hand/i.test(row.closest('[role="list"]')?.getAttribute('aria-label') ?? '')) return true;
+  return Array.from(row.querySelectorAll('i, [aria-hidden="true"]')).some((e) => /^(back_hand|front_hand|pan_tool)$/.test(cleanName(e.textContent)));
+}
+
+/** Everyone listed in the People panel (empty when the panel isn't open). Deduplicated by id. */
+export function scrapeRoster(): RosterEntry[] {
+  const out = new Map<string, RosterEntry>();
+  for (const row of Array.from(document.querySelectorAll<HTMLElement>(ROSTER_ROW))) {
+    const participantId = row.getAttribute('data-participant-id') ?? '';
+    if (!participantId) continue;
+    const text = row.innerText ?? '';
+    const lines = text.split('\n').map((s) => s.trim());
+    const displayName = cleanName(row.getAttribute('aria-label')) || cleanName(lines[0]);
+    if (!displayName) continue;
+    const roleLine = lines.find((l) => /^(meeting host|host|co-host|cohost)$/i.test(l)) ?? '';
+    const e: RosterEntry = {
+      participantId,
+      displayName,
+      isSelf: /\(you\)/i.test(text) || (!!botName && displayName.toLowerCase() === botName),
+      isHost: /^(meeting )?host$/i.test(roleLine),
+      isCohost: /co-?host/i.test(roleLine),
+      avatarUrl: row.querySelector<HTMLImageElement>('img')?.src ?? '',
+      muted: rowMuted(row),
+      handRaised: rowHandRaised(row),
+      el: row,
+    };
+    const prev = out.get(participantId);
+    if (prev) {
+      // Same person listed twice (e.g. "Raised hands" + "In the meeting"): merge.
+      prev.handRaised ||= e.handRaised;
+      prev.isHost ||= e.isHost;
+      prev.isCohost ||= e.isCohost;
+      if (prev.muted === null) prev.muted = e.muted;
+      prev.avatarUrl ||= e.avatarUrl;
+    } else out.set(participantId, e);
+  }
+  return Array.from(out.values());
+}
+
+function rosterRow(participantId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`${ROSTER_ROW}[data-participant-id="${CSS.escape(participantId)}"]`);
+}
+
+function escapeKey(): void {
+  const t = document.activeElement ?? document.body;
+  t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+}
+
+function visibleMenuItems(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]')).filter(isVisible);
+}
+
+/** Menu-item label without the leading Material icon ligature ("keep Pin to the screen" -> "Pin to the screen"). */
+function menuLabel(e: HTMLElement): string {
+  let t = cleanName(e.innerText);
+  for (const i of Array.from(e.querySelectorAll('i'))) {
+    const ic = cleanName(i.textContent);
+    if (ic && t.startsWith(ic)) t = t.slice(ic.length).trim();
+  }
+  return t || cleanName(e.getAttribute('aria-label'));
+}
+
+/**
+ * Open a participant's "More actions" (roster) or "More options for X" (tile) menu and pick an item.
+ * `steps` walks submenus, e.g. [/^pin to the screen/, /^for everyone$/]. A step that doesn't appear
+ * after the first one is skipped only when `optional` (Meet sometimes has no submenu).
+ */
+async function participantMenu(participantId: string, displayName: string, steps: RegExp[], optionalTail = false): Promise<string | null> {
+  const triggers: HTMLElement[] = [];
+  const rb = rosterRow(participantId)?.querySelector<HTMLElement>('[aria-label="More actions"], [aria-haspopup="menu"]');
+  if (rb) triggers.push(rb);
+  const want = `more options for ${displayName}`.toLowerCase();
+  const tb = Array.from(document.querySelectorAll<HTMLElement>('[aria-label]')).find(
+    (b) => cleanName(b.getAttribute('aria-label')).toLowerCase() === want && isVisible(b),
+  );
+  if (tb) triggers.push(tb);
+  const find = async (re: RegExp) => {
+    for (let i = 0; i < 10; i++) {
+      await sleep(100);
+      const hit = visibleMenuItems().find((m) => re.test(menuLabel(m)) && m.getAttribute('aria-disabled') !== 'true');
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  for (const t of triggers) {
+    t.click();
+    const labels: string[] = [];
+    let ok = true;
+    for (let i = 0; i < steps.length; i++) {
+      const hit = await find(steps[i]);
+      if (!hit) {
+        ok = i > 0 && optionalTail;
+        break;
+      }
+      labels.push(menuLabel(hit));
+      hit.click();
+    }
+    if (ok && labels.length) return labels.join(' > ');
+    escapeKey();
+    await sleep(250);
+  }
+  return null;
+}
+
+async function confirmDialog(re: RegExp): Promise<boolean> {
+  for (let i = 0; i < 10; i++) {
+    await sleep(150);
+    const b = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button, [role="alertdialog"] button')).find(
+      (x) => re.test(cleanName(x.innerText || x.getAttribute('aria-label'))) && isVisible(x),
+    );
+    if (b) {
+      b.click();
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Pin / unpin in the bot's own view (Meet "Pin to the screen" > "For myself only"). */
+export async function pinParticipant(participantId: string, displayName: string, on: boolean): Promise<boolean> {
+  // Tile shortcut first: "Pin X to your main screen" / "Unpin X from your main screen".
+  const n = displayName.toLowerCase();
+  const tileBtn = Array.from(document.querySelectorAll<HTMLElement>('[aria-label]')).find((b) => {
+    const l = cleanName(b.getAttribute('aria-label')).toLowerCase();
+    return isVisible(b) && (on ? l === `pin ${n} to your main screen` : l === `unpin ${n}` || l === `unpin ${n} from your main screen`);
+  });
+  if (tileBtn) {
+    tileBtn.click();
+    await sleep(400);
+    // The tile button may open the same "For myself only / For everyone" chooser.
+    if (on) visibleMenuItems().find((m) => /^for (myself|yourself)/i.test(menuLabel(m)))?.click();
+    return true;
+  }
+  const label = on
+    ? await participantMenu(participantId, displayName, [/^pin( to the screen)?$/i, /^for (myself|yourself)( only)?$/i], true)
+    : await participantMenu(participantId, displayName, [/^unpin\b/i]);
+  if (!label) throw new Error(on ? 'Pin is not available for this participant' : 'Participant is not pinned');
+  return true;
+}
+
+/** Spotlight = Meet "Pin to the screen" > "For everyone" (host / co-host only). */
+export async function spotlightParticipant(participantId: string, displayName: string, on: boolean): Promise<boolean> {
+  const label = on
+    ? await participantMenu(participantId, displayName, [/^pin( to the screen)?$/i, /^for everyone$/i])
+    : await participantMenu(participantId, displayName, [/^unpin\b/i]);
+  if (!label) throw new Error(on ? 'Spotlight (pin for everyone) is not available (the bot must be host or co-host)' : 'Participant is not spotlit');
+  return true;
+}
+
+/** Host action: remove someone from the call (confirms Meet's dialog). */
+export async function removeParticipant(participantId: string, displayName: string): Promise<boolean> {
+  const label = await participantMenu(participantId, displayName, [/^remove from (the )?call/i]);
+  if (!label) throw new Error('Remove from the call is not available (the bot must be host or co-host)');
+  await confirmDialog(/^remove$/i);
+  return true;
+}
+
+/** Lower one participant's hand (host/co-host), or every hand when no id is given. */
+export async function lowerHand(participantId?: string, displayName?: string): Promise<boolean> {
+  if (!participantId) {
+    const all = buttonByLabel(/^lower all( hands)?$/i);
+    if (all) {
+      all.click();
+      await confirmDialog(/^lower all( hands)?$/i);
+      return true;
+    }
+    const own = buttonByLabel(/^lower hand\b/i); // the bot's own hand
+    if (own) {
+      own.click();
+      return true;
+    }
+    throw new Error('No raised hands to lower');
+  }
+  const btn = rosterRow(participantId)?.querySelector<HTMLElement>('[aria-label*="lower" i][aria-label*="hand" i]');
+  if (btn) {
+    btn.click();
+    return true;
+  }
+  const label = await participantMenu(participantId, displayName ?? '', [/^lower hand/i]);
+  if (!label) throw new Error('Lower hand is not available (no raised hand, or the bot is not host)');
+  return true;
+}
+
+/** Host action: "Mute all" in the People panel. */
+export async function muteAll(): Promise<boolean> {
+  ensurePeoplePanel();
+  await sleep(300);
+  const b = buttonByLabel(/^mute (all|everyone)$/i);
+  if (!b) throw new Error('Mute all is not available (nobody is unmuted, or the bot is not host)');
+  b.click();
+  await confirmDialog(/^mute( all| everyone)?$/i);
+  return true;
+}
+
+/** Host action: mute one participant from their roster row (works for people without a tile). */
+export async function muteRosterParticipant(participantId: string): Promise<boolean> {
+  const row = rosterRow(participantId);
+  const b = row ? Array.from(row.querySelectorAll<HTMLElement>('[aria-label]')).find((e) => /^mute .*microphone/i.test(e.getAttribute('aria-label') ?? '')) : null;
+  if (!b) return false;
+  b.click();
+  await confirmDialog(/^mute$/i);
+  return true;
+}
+
+/** Tile-level pin state: "Pinned for yourself" / "Unpin X" = pinned, "Pinned for everyone" = spotlit. */
+export function tilePinState(tile: HTMLElement): { pinned: boolean; spotlit: boolean } {
+  let pinned = false;
+  let spotlit = false;
+  for (const e of Array.from(tile.querySelectorAll('[aria-label]'))) {
+    const l = e.getAttribute('aria-label') ?? '';
+    if (/pinned for everyone|spotlight/i.test(l)) spotlit = true;
+    else if (/^unpin\b|pinned for (yourself|you)/i.test(l)) pinned = true;
+  }
+  return { pinned, spotlit };
+}
