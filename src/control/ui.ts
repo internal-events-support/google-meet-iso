@@ -142,7 +142,7 @@ function fmtDuration(ms: number): string {
   return hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function renderMeetingBar(phase: MeetPhase, url: string, detail: string): void {
+function renderMeetingBar(phase: MeetPhase, url: string, detail: string, since: number): void {
   const bar = $('meetingBar');
   const onMeetingPage = !!meetingCode(url);
   const state =
@@ -153,8 +153,8 @@ function renderMeetingBar(phase: MeetPhase, url: string, detail: string): void {
         : phase === 'green-room' || (phase === 'loading' && onMeetingPage)
           ? 'joining'
           : 'idle';
-  if (state === 'live' && !inCallSince) inCallSince = Date.now();
-  if (state !== 'live') inCallSince = 0;
+  // Start time comes from the Meet client, so the timer survives UI reloads.
+  inCallSince = state === 'live' ? since || inCallSince || Date.now() : 0;
   bar.dataset.state = state;
   $('callLabel').textContent = state === 'live' ? 'Live' : state === 'waiting' ? 'Waiting for host to admit' : 'Joining';
   $('callCode').textContent = meetingCode(url);
@@ -183,7 +183,7 @@ function renderState(s: MeetState): void {
   ndi.textContent = s.ndi.ok ? '' : `NDI unavailable: ${s.ndi.error ?? 'unknown error'}`;
   ndi.className = 'pill bad';
 
-  renderMeetingBar(s.phase, s.url, s.phaseDetail);
+  renderMeetingBar(s.phase, s.url, s.phaseDetail, s.inCallSince);
 
   renderFeeds(s.feeds);
   const empty = $('empty');

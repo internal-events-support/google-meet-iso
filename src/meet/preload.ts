@@ -212,13 +212,18 @@ function tick(): void {
   }
 }
 
+let inCallSince = 0;
+
 function report(): void {
   const { phase, detail } = meetingPhase();
+  if (phase === 'in-call' && !inCallSince) inCallSince = Date.now();
+  if (phase !== 'in-call') inCallSince = 0;
   const state: MeetState = {
     url: location.href,
     phase,
     phaseDetail: detail,
     inCall: inCall(),
+    inCallSince,
     camOn: cameraOn(),
     micOn: micOn(),
     botCam: {

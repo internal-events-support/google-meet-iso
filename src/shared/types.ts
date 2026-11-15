@@ -100,6 +100,8 @@ export interface MeetState {
   /** Human-readable detail for the phase (e.g. Meet's own message). */
   phaseDetail: string;
   inCall: boolean;
+  /** Epoch ms when the bot entered the current call (0 if not in a call). */
+  inCallSince: number;
   camOn: boolean | null;
   micOn: boolean | null;
   botCam: BotCamState;
