@@ -13,7 +13,12 @@
 </style></head>
 <body>
 <div id="grid"></div>
-<footer><button aria-label="Leave call">Leave</button></footer>
+<footer>
+  <button id="camBtn" aria-label="Turn off camera (ctrl + e)">Cam</button>
+  <button id="micBtn" aria-label="Turn off microphone (ctrl + d)">Mic</button>
+  <button aria-label="Leave call">Leave</button>
+  <span id="vis"></span>
+</footer>
 <script>
   const people = [
     { id: 'spaces/x/devices/101', name: 'Alice Anderson', color: '#e53935', w: 1280, h: 720 },
@@ -49,6 +54,24 @@
     tile.appendChild(name);
     grid.appendChild(tile);
   }
+  // Like Meet: grab camera+mic via (shimmed) getUserMedia and show it in the self tile.
+  const selfTile = document.querySelector('[data-participant-id="spaces/x/devices/100"]');
+  navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((s) => {
+    window.__selfStream = s;
+    const v = document.createElement('video');
+    v.muted = true; v.autoplay = true; v.srcObject = s; v.style.cssText = 'width:100%;height:100%;object-fit:cover';
+    selfTile.prepend(v);
+    window.__gum = s.getTracks().map((t) => `${t.kind}:${t.label}:${t.readyState}`).join(', ');
+  }).catch((e) => { window.__gum = 'error: ' + e.name + ' ' + e.message; });
+  navigator.mediaDevices.enumerateDevices().then((d) => { window.__enum = d.map((x) => `${x.kind}:${x.label}`).join(', '); });
+  for (const [id, kind] of [['camBtn', 'camera'], ['micBtn', 'microphone']]) {
+    const b = document.getElementById(id);
+    b.addEventListener('click', () => {
+      const on = /turn off/i.test(b.getAttribute('aria-label'));
+      b.setAttribute('aria-label', `Turn ${on ? 'on' : 'off'} ${kind}`);
+    });
+  }
+  setInterval(() => { document.getElementById('vis').textContent = document.visibilityState; }, 500);
   // Simulate a participant leaving after 20s.
   setTimeout(() => document.querySelector('[data-participant-id="spaces/x/devices/102"]')?.remove(), 20000);
 </script>

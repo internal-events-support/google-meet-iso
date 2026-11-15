@@ -2,57 +2,83 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:" />
 <title>GMeet ISO</title>
 <link rel="stylesheet" href="control.css" />
 </head>
 <body>
 <header>
   <div class="brand">GMeet <b>ISO</b></div>
-  <div id="ndiStatus" class="pill">NDI: …</div>
-  <div id="callStatus" class="pill">Not in a call</div>
+  <div class="meeting">
+    <input id="meetUrl" placeholder="Meet link or code — abc-defg-hij" spellcheck="false" />
+    <button id="joinBtn" class="primary">Join</button>
+    <button id="leaveBtn" class="danger" hidden>Leave</button>
+  </div>
+  <div id="phase" class="phase"><span class="dot"></span><span id="phaseText">Starting…</span></div>
+  <button id="signInBtn" class="primary" hidden>Sign in to Google</button>
+  <div id="ndiStatus" class="pill">NDI …</div>
 </header>
 
-<section class="join">
-  <input id="meetUrl" placeholder="Meet link or code — e.g. https://meet.google.com/abc-defg-hij" spellcheck="false" />
-  <button id="joinBtn" class="primary">Join</button>
-  <button id="leaveBtn">Leave</button>
-  <button id="showBtn">Show Meet window</button>
-  <button id="signInBtn">Google sign-in</button>
-</section>
-<div id="joinError" class="error"></div>
+<div class="body">
+  <main>
+    <div class="section-head">
+      <h2>Participants <span id="feedCount" class="muted"></span></h2>
+      <span class="muted small">Each participant is published as an NDI source. Red border = on air (receiver connected).</span>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty">
+      <div class="empty-title" id="emptyTitle">Not in a meeting</div>
+      <div class="muted" id="emptyText">Enter a Meet link above and press Join.</div>
+    </div>
+  </main>
 
-<main>
-  <section class="feeds">
-    <h2>Feeds <span id="feedCount" class="muted"></span></h2>
-    <table>
-      <thead><tr><th>On</th><th>Participant</th><th>NDI source</th><th>Video</th><th>FPS</th><th>Rx</th><th>Status</th></tr></thead>
-      <tbody id="feedRows"><tr><td colspan="7" class="muted">Join a call. Every participant tile visible in the Meet window becomes an NDI source.</td></tr></tbody>
-    </table>
-    <p class="hint">Tip: in Meet choose <i>Change layout → Tiled</i> and raise the tile count. Only tiles on screen can be captured, and bigger tiles get higher-resolution video.</p>
-  </section>
+  <aside>
+    <section class="card">
+      <h2>Bot output</h2>
+      <div class="preview-box"><img id="botPreview" alt="" /><div class="preview-label" id="botCamStatus">No camera source</div></div>
+      <label>Camera source
+        <span class="row"><select id="camSource"></select><button id="refreshNdi" title="Refresh NDI sources">⟳</button></span>
+      </label>
+      <label>Microphone
+        <select id="micSource"></select>
+      </label>
+      <div class="muted small" id="micActive"></div>
+      <div class="toggles">
+        <button id="camToggle" class="toggle" disabled>Camera</button>
+        <button id="micToggle" class="toggle" disabled>Mic</button>
+      </div>
+    </section>
 
-  <aside class="settings">
-    <h2>Settings</h2>
-    <label>NDI name prefix <input id="s_ndiPrefix" /></label>
-    <label>NDI groups <input id="s_ndiGroups" placeholder="(default)" /></label>
-    <label>Max FPS <input id="s_maxFps" type="number" min="1" max="60" /></label>
-    <label>Keep source after leave (s) <input id="s_graceSeconds" type="number" min="0" max="600" /></label>
-    <label>Meet window W×H
-      <span class="row"><input id="s_meetWindowWidth" type="number" min="640" /><input id="s_meetWindowHeight" type="number" min="360" /></span>
-    </label>
-    <label class="check"><input id="s_screenShare" type="checkbox" /> Screen share feed</label>
-    <label class="check"><input id="s_includeSelf" type="checkbox" /> Include bot's own tile</label>
-    <label class="check"><input id="s_autoJoin" type="checkbox" /> Auto-click "Join now"</label>
-    <label class="check"><input id="s_muteLocalAudio" type="checkbox" /> Mute local Meet audio</label>
-    <button id="dumpBtn">Dump Meet DOM (diagnostics)</button>
+    <section class="card">
+      <details>
+        <summary><h2>Settings</h2></summary>
+        <label>NDI name prefix <input id="s_ndiPrefix" /></label>
+        <label>NDI groups <input id="s_ndiGroups" placeholder="(default)" /></label>
+        <span class="row2">
+          <label>Max FPS <input id="s_maxFps" type="number" min="1" max="60" /></label>
+          <label>Hold after leave (s) <input id="s_graceSeconds" type="number" min="0" max="600" /></label>
+        </span>
+        <span class="row2">
+          <label>Meet viewport W <input id="s_meetWindowWidth" type="number" min="640" /></label>
+          <label>H <input id="s_meetWindowHeight" type="number" min="360" /></label>
+        </span>
+        <label>Preview FPS <input id="s_previewFps" type="number" min="1" max="30" /></label>
+        <label class="check"><input id="s_screenShare" type="checkbox" /> Screen share feed</label>
+        <label class="check"><input id="s_includeSelf" type="checkbox" /> Include bot's own tile</label>
+        <label class="check"><input id="s_autoJoin" type="checkbox" /> Join automatically</label>
+        <label class="check"><input id="s_muteLocalAudio" type="checkbox" /> Mute meeting audio on this PC</label>
+        <button id="dumpBtn" class="small-btn">Diagnostics: dump Meet DOM</button>
+      </details>
+    </section>
   </aside>
-</main>
+</div>
 
-<section class="logs">
-  <h2>Log</h2>
-  <pre id="log"></pre>
-</section>
+<footer>
+  <details id="logDrawer">
+    <summary>Log</summary>
+    <pre id="log"></pre>
+  </details>
+</footer>
 
 <script src="cjs-shim.js"></script>
 <script src="../dist/control/ui.js"></script>

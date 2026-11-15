@@ -1,5 +1,13 @@
 // Types and IPC channel names shared by main, the Meet preload and the control UI.
 
+export type CameraSourceType = 'none' | 'ndi' | 'device';
+
+export interface CameraSource {
+  type: CameraSourceType;
+  /** NDI full source name ("MACHINE (Source)") or the webcam's device label. */
+  name: string;
+}
+
 export interface Settings {
   /** Prefix for NDI source names, e.g. "GMEET" -> "GMEET - Alice". */
   ndiPrefix: string;
@@ -13,13 +21,21 @@ export interface Settings {
   screenShare: boolean;
   /** Publish the bot's own tile (normally off). */
   includeSelf: boolean;
-  /** Click "Join now" / "Ask to join" automatically on the green room page. */
+  /** Click "Join now" / "Ask to join" automatically. */
   autoJoin: boolean;
-  /** Mute the Meet window's local audio playback. */
+  /** Mute the hidden Meet page's local audio playback. */
   muteLocalAudio: boolean;
-  /** Meet window size; Meet requests higher resolution for bigger tiles. */
+  /** Size of the hidden Meet viewport; Meet requests higher resolution for bigger tiles. */
   meetWindowWidth: number;
   meetWindowHeight: number;
+  /** What the bot sends as its camera. */
+  camera: CameraSource;
+  /** Label of the local audio input the bot sends as its mic ('' = none). */
+  micLabel: string;
+  /** Preview thumbnails per second in the control UI. */
+  previewFps: number;
+  /** Last meeting link entered. */
+  lastMeetUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,9 +49,16 @@ export const DEFAULT_SETTINGS: Settings = {
   muteLocalAudio: false,
   meetWindowWidth: 1920,
   meetWindowHeight: 1080,
+  camera: { type: 'none', name: '' },
+  micLabel: '',
+  previewFps: 8,
+  lastMeetUrl: '',
 };
 
 export type FeedKind = 'camera' | 'screen';
+
+/** Where the hidden Meet client is in the join flow. */
+export type MeetPhase = 'loading' | 'signed-out' | 'home' | 'green-room' | 'waiting' | 'in-call' | 'denied' | 'ended';
 
 export interface FeedState {
   key: string;
@@ -60,12 +83,32 @@ export interface FeedState {
   format: string;
 }
 
+export interface BotCamState {
+  source: CameraSource;
+  status: string;
+  width: number;
+  height: number;
+  fps: number;
+}
+
 export interface MeetState {
   url: string;
+  phase: MeetPhase;
+  /** Human-readable detail for the phase (e.g. Meet's own message). */
+  phaseDetail: string;
   inCall: boolean;
+  camOn: boolean | null;
+  micOn: boolean | null;
+  botCam: BotCamState;
+  micActive: string;
   ndi: { ok: boolean; version?: string; error?: string };
   feeds: FeedState[];
   updatedAt: number;
+}
+
+export interface DeviceLists {
+  videoInputs: string[];
+  audioInputs: string[];
 }
 
 export interface ControlApi {
@@ -74,11 +117,16 @@ export interface ControlApi {
   join(url: string): Promise<void>;
   leave(): Promise<void>;
   signIn(): Promise<void>;
-  showMeetWindow(): Promise<void>;
   setFeedEnabled(key: string, enabled: boolean): Promise<void>;
+  setMeetCamera(on: boolean): Promise<void>;
+  setMeetMic(on: boolean): Promise<void>;
+  ndiSources(): Promise<string[]>;
+  devices(): Promise<DeviceLists>;
   dumpDom(): Promise<string>;
   onState(cb: (s: MeetState) => void): void;
   onLog(cb: (line: string) => void): void;
+  onPreview(cb: (key: string, jpeg: ArrayBuffer) => void): void;
+  onDevices(cb: (d: DeviceLists) => void): void;
 }
 
 export const IPC = {
@@ -88,12 +136,17 @@ export const IPC = {
   join: 'ctl:join',
   leave: 'ctl:leave',
   signIn: 'ctl:signIn',
-  showMeet: 'ctl:showMeet',
   setFeedEnabled: 'ctl:setFeedEnabled',
+  setMeetCamera: 'ctl:setMeetCamera',
+  setMeetMic: 'ctl:setMeetMic',
+  ndiSources: 'ctl:ndiSources',
+  devices: 'ctl:devices',
   dumpDom: 'ctl:dumpDom',
   // main -> control
   state: 'ctl:state',
   log: 'ctl:log',
+  preview: 'ctl:preview',
+  devicesChanged: 'ctl:devicesChanged',
   // meet preload <-> main
   meetState: 'meet:state',
   meetLog: 'meet:log',
@@ -102,4 +155,12 @@ export const IPC = {
   meetDumpRequest: 'meet:dumpRequest',
   meetDumpResult: 'meet:dumpResult',
   meetGetSettings: 'meet:getSettings',
+  meetPreview: 'meet:preview',
+  meetDevices: 'meet:devices',
+  meetSetCam: 'meet:setCam',
+  meetSetMic: 'meet:setMic',
+  meetLeave: 'meet:leave',
 } as const;
+
+/** Preview key used for the bot's own outgoing camera. */
+export const BOT_CAM_KEY = '__botcam__';

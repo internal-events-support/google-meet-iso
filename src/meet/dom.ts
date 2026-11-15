@@ -114,32 +114,115 @@ export function pickVideo(tile: HTMLElement): HTMLVideoElement | null {
   return best;
 }
 
-/** True once we're in the call (not the green room / landing page). */
+/** Text of the page body, normalized (cheap enough at 2 Hz). */
+function bodyText(): string {
+  return cleanName(document.body?.innerText ?? '').slice(0, 4000);
+}
+
+const WAITING_RE = /please wait until a meeting host brings you|asking to be let in|you'll join the call when someone lets you in|waiting for the host|asking to join\.\.\./i;
+const DENIED_RE = /you can't join this (video )?call|someone in the call denied your request|your request to join was denied|no one responded to your request|you can't create a meeting yourself|meeting code (has expired|isn't valid)|check your meeting code/i;
+const ENDED_RE = /you left the meeting|you've been removed from the meeting|you have been removed|the call has ended|meeting has ended|returning to home screen|rejoin/i;
+
+function hasLeaveButton(): boolean {
+  return !!document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]');
+}
+
+/** True once we're in the call (not green room / waiting room / landing page). */
 export function inCall(): boolean {
-  // The leave-call button exists only inside a call.
-  return !!document.querySelector(
-    '[aria-label*="Leave call" i], [aria-label*="leave call" i], [data-tooltip*="Leave call" i]',
-  );
+  if (!hasLeaveButton()) return false;
+  return !WAITING_RE.test(bodyText());
+}
+
+/** Where the Meet client is in the join flow, plus Meet's own message when relevant. */
+export function meetingPhase(): { phase: import('../shared/types').MeetPhase; detail: string } {
+  const host = location.hostname;
+  if (host !== 'meet.google.com' && !location.pathname.endsWith('mock-meet.html')) {
+    if (host.endsWith('workspace.google.com') || host === 'accounts.google.com') return { phase: 'signed-out', detail: 'Google sign-in required' };
+    return { phase: 'loading', detail: host };
+  }
+  const text = bodyText();
+  const firstMatch = (re: RegExp) => text.match(re)?.[0] ?? '';
+  if (hasLeaveButton()) {
+    if (WAITING_RE.test(text)) return { phase: 'waiting', detail: 'Waiting for a host to admit the bot' };
+    return { phase: 'in-call', detail: '' };
+  }
+  if (DENIED_RE.test(text)) return { phase: 'denied', detail: firstMatch(DENIED_RE) };
+  if (ENDED_RE.test(text) && /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(location.pathname)) return { phase: 'ended', detail: firstMatch(ENDED_RE) };
+  if (findButton(/^(join now|ask to join|join)$/i)) return { phase: 'green-room', detail: 'Ready to join' };
+  if (/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(location.pathname)) return { phase: 'loading', detail: 'Opening meeting…' };
+  return { phase: 'home', detail: '' };
+}
+
+function findButton(re: RegExp): HTMLElement | null {
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+    const t = cleanName(b.innerText || b.getAttribute('aria-label'));
+    const a = cleanName(b.getAttribute('aria-label'));
+    if ((re.test(t) || re.test(a)) && isVisible(b) && !(b as HTMLButtonElement).disabled) return b;
+  }
+  return null;
+}
+
+/** Meet's camera/mic toggle buttons are labelled "Turn off camera" / "Turn on microphone" etc. */
+function toggleState(kind: 'camera' | 'microphone'): { on: boolean | null; el: HTMLElement | null } {
+  for (const b of Array.from(document.querySelectorAll<HTMLElement>('[aria-label], [data-tooltip]'))) {
+    const label = cleanName(b.getAttribute('aria-label') || b.getAttribute('data-tooltip'));
+    const m = label.match(new RegExp(`^turn (on|off) ${kind}`, 'i'));
+    if (m && isVisible(b)) return { on: m[1].toLowerCase() === 'off', el: b };
+  }
+  return { on: null, el: null };
+}
+
+export function cameraOn(): boolean | null {
+  return toggleState('camera').on;
+}
+export function micOn(): boolean | null {
+  return toggleState('microphone').on;
+}
+/** Click Meet's toggle if its state differs. Returns true if clicked. */
+export function setDevice(kind: 'camera' | 'microphone', on: boolean): boolean {
+  const s = toggleState(kind);
+  if (s.on === null || s.on === on || !s.el) return false;
+  s.el.click();
+  return true;
+}
+
+export function clickLeave(): boolean {
+  const b = document.querySelector<HTMLElement>('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]');
+  if (!b) return false;
+  b.click();
+  return true;
+}
+
+/**
+ * If camera/mic permission is unavailable Meet asks "Do you want people to see and
+ * hear you?" with "Continue without microphone and camera". It can appear before OR after
+ * "Join now" is clicked, so this runs every tick while not in a call.
+ */
+export function dismissDeviceDialog(): boolean {
+  const re = /^continue without (microphone|camera|mic)/i;
+  // Match real buttons first: wrapper <div>s contain the same text but have no handler.
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'))) {
+    const t = cleanName(el.innerText || el.getAttribute('aria-label'));
+    if (!re.test(t) || !isVisible(el)) continue;
+    el.click();
+    return true;
+  }
+  return false;
 }
 
 /** Click "Join now" / "Ask to join" on the green room page if present. */
 export function tryAutoJoin(): boolean {
-  const buttons = Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"]'));
-  for (const b of buttons) {
-    const t = cleanName(b.innerText || b.getAttribute('aria-label'));
-    if (/^(join now|ask to join|join)$/i.test(t) && isVisible(b) && !(b as HTMLButtonElement).disabled) {
-      b.click();
-      return true;
-    }
-  }
-  return false;
+  const b = findButton(/^(join now|ask to join|join)$/i);
+  if (!b) return false;
+  b.click();
+  return true;
 }
 
 /** Diagnostic snapshot used to recalibrate the heuristics above against live Meet. */
 export function dumpDom(): string {
   const lines: string[] = [];
   lines.push(`url: ${location.href}`);
-  lines.push(`inCall: ${inCall()}`);
+  lines.push(`inCall: ${inCall()}  phase: ${JSON.stringify(meetingPhase())}  cam=${cameraOn()} mic=${micOn()}`);
   lines.push(`videos: ${document.querySelectorAll('video').length}`);
   for (const v of Array.from(document.querySelectorAll('video'))) {
     const tile = v.closest(`[${TILE_ATTR}]`);

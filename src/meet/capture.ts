@@ -1,8 +1,13 @@
 // Per-feed capture: follows a Meet tile's live <video>, grabs frames as WebCodecs
 // VideoFrames and pushes them straight into the native NDI sender (no IPC hop).
+//
+// Primary path: MediaStreamTrackProcessor on the tile's video track — delivers every
+// decoded frame independent of page painting (the Meet page is rendered offscreen, where
+// requestVideoFrameCallback only fires at the paint rate). Fallback: element snapshots.
 
 import type { FeedKind, FeedState } from '../shared/types';
 import { pickVideo } from './dom';
+import { Thumbnailer } from './camsource';
 
 export interface NativeSender {
   sendVideo(data: ArrayBuffer | Uint8Array, w: number, h: number, fmt: string, stride?: number): boolean;
@@ -18,6 +23,11 @@ export interface NativeNdi {
 type RVFCVideo = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: (now: number, meta: unknown) => void) => number;
   cancelVideoFrameCallback?: (h: number) => void;
+};
+
+// Chrome-only Insertable Streams API (not in TS's DOM lib).
+declare const MediaStreamTrackProcessor: {
+  new (init: { track: MediaStreamTrack; maxBufferSize?: number }): { readable: ReadableStream<VideoFrame> };
 };
 
 export class FeedCapture {
@@ -45,13 +55,18 @@ export class FeedCapture {
   private lastW = 0;
   private lastH = 0;
   private lastFmt = '';
+  private thumb = new Thumbnailer(320);
   private watchdog: number;
+  private trackId = '';
+  private reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
+  private readerToken = 0;
 
   constructor(
     private ndi: NativeNdi,
     init: { key: string; participantId: string; kind: FeedKind; displayName: string },
-    private opts: () => { maxFps: number; groups: string },
+    private opts: () => { maxFps: number; groups: string; previewFps: number },
     private log: (s: string) => void,
+    private onPreview: (key: string, jpeg: ArrayBuffer) => void = () => {},
   ) {
     this.key = init.key;
     this.participantId = init.participantId;
@@ -101,10 +116,18 @@ export class FeedCapture {
     this.tile = tile;
     if (tile) this.lastSeen = performance.now();
     const v = tile ? (pickVideo(tile) as RVFCVideo | null) : null;
-    if (v !== this.video) {
+    const src = v?.srcObject;
+    const track = src instanceof MediaStream ? (src.getVideoTracks()[0] ?? null) : null;
+    const newTrackId = track && track.readyState === 'live' ? track.id : '';
+    if (v !== this.video || newTrackId !== this.trackId) {
       this.detachVideo();
       this.video = v;
-      if (v) this.scheduleRvfc();
+      if (track && newTrackId && typeof MediaStreamTrackProcessor === 'function') {
+        this.trackId = newTrackId;
+        void this.readTrack(track);
+      } else if (v) {
+        this.scheduleRvfc();
+      }
     }
   }
 
@@ -112,6 +135,32 @@ export class FeedCapture {
     if (this.video && this.rvfcHandle != null) this.video.cancelVideoFrameCallback?.(this.rvfcHandle);
     this.rvfcHandle = null;
     this.video = null;
+    this.trackId = '';
+    this.readerToken++;
+    this.reader?.cancel().catch(() => {});
+    this.reader = null;
+  }
+
+  private async readTrack(track: MediaStreamTrack): Promise<void> {
+    const token = ++this.readerToken;
+    try {
+      const proc = new MediaStreamTrackProcessor({ track, maxBufferSize: 2 });
+      const reader = proc.readable.getReader();
+      this.reader = reader;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || !value) break;
+        if (token !== this.readerToken) {
+          value.close();
+          break;
+        }
+        void this.handleFrame(value);
+      }
+    } catch (e) {
+      if (token === this.readerToken) this.log(`track reader [${this.displayName}]: ${(e as Error).message}`);
+    }
+    // Track ended: next bindTile() tick re-binds (possibly via the element fallback).
+    if (token === this.readerToken) this.trackId = '';
   }
 
   private scheduleRvfc(): void {
@@ -126,28 +175,44 @@ export class FeedCapture {
 
   private onWatchdog(): void {
     const v = this.video;
-    if (!v || v.readyState < 2) return;
+    if (!v || v.readyState < 2 || this.trackId) return;
     // Only kick in if the primary rVFC path has gone quiet.
     if (performance.now() - this.lastCapture > 150) void this.capture();
   }
 
+  /** Element-snapshot fallback path. */
   private async capture(): Promise<void> {
     const v = this.video;
     if (!v || !this.sender || !this.enabled || this.inFlight >= 2) return;
+    let frame: VideoFrame;
+    try {
+      frame = new VideoFrame(v);
+    } catch {
+      return;
+    }
+    await this.handleFrame(frame);
+  }
+
+  /** Takes ownership of `frame` (always closes it). */
+  private async handleFrame(frame: VideoFrame): Promise<void> {
+    if (!this.sender || !this.enabled || this.inFlight >= 2) {
+      frame.close();
+      return;
+    }
     const now = performance.now();
     // Rolling-window rate cap: tolerant of source jitter (a strict min-interval gate
     // throws away ~1/3 of frames from a jittery 30 fps source).
     const maxFps = Math.max(1, this.opts().maxFps);
-    if (now - this.lastCapture < 500 / maxFps) return;
     while (this.frameTimes.length && now - this.frameTimes[0] > 1000) this.frameTimes.shift();
-    if (this.frameTimes.length >= maxFps) return;
+    if (now - this.lastCapture < 500 / maxFps || this.frameTimes.length >= maxFps) {
+      frame.close();
+      return;
+    }
     this.inFlight++;
     this.lastCapture = now;
     const mySeq = ++this.seq;
-    let frame: VideoFrame | null = null;
     let buf: ArrayBuffer | null = null;
     try {
-      frame = new VideoFrame(v);
       const rect = frame.visibleRect!;
       const w = rect.width;
       const h = rect.height;
@@ -192,6 +257,8 @@ export class FeedCapture {
       if (mySeq < this.lastSentSeq) return;
       this.lastSentSeq = mySeq;
       this.sender?.sendVideo(buf, w, h, ndiFmt, layout[0].stride); // native side memcpy's
+      // Thumbnail draws synchronously before its first await, so `frame` is still open.
+      void this.thumb.maybe(frame, w, h, this.opts().previewFps).then((jpg) => jpg && this.onPreview(this.key, jpg));
       this.lastFmt = `${fmt ?? 'gpu'}->${ndiFmt}`;
       this.lastW = w;
       this.lastH = h;
@@ -199,7 +266,7 @@ export class FeedCapture {
     } catch (e) {
       this.log(`capture error [${this.displayName}]: ${(e as Error).message}`);
     } finally {
-      frame?.close();
+      frame.close();
       if (buf && this.bufPool.length < 2) this.bufPool.push(buf);
       this.inFlight--;
     }

@@ -401,11 +401,150 @@ Napi::Value ReceiveFrame(const Napi::CallbackInfo& info) {
   return result;
 }
 
+// --- Finder: non-blocking NDI source discovery (keeps running in the background) ---
+class Finder : public Napi::ObjectWrap<Finder> {
+ public:
+  static Napi::Function Init(Napi::Env env) {
+    return DefineClass(env, "Finder", {
+      InstanceMethod("sources", &Finder::Sources),
+      InstanceMethod("destroy", &Finder::Destroy),
+    });
+  }
+  explicit Finder(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Finder>(info) {
+    if (!LoadNdi()) { Napi::Error::New(info.Env(), g_loadError).ThrowAsJavaScriptException(); return; }
+    NDIlib_find_create_t fc{};
+    fc.show_local_sources = true;
+    find_ = g_ndi->find_create_v2(&fc);
+  }
+  ~Finder() override { if (find_) g_ndi->find_destroy(find_); }
+
+ private:
+  Napi::Value Sources(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!find_) return Napi::Array::New(env, 0);
+    uint32_t n = 0;
+    const NDIlib_source_t* srcs = g_ndi->find_get_current_sources(find_, &n);
+    auto arr = Napi::Array::New(env, n);
+    for (uint32_t i = 0; i < n; i++) arr.Set(i, srcs[i].p_ndi_name);
+    return arr;
+  }
+  Napi::Value Destroy(const Napi::CallbackInfo& info) {
+    if (find_) { g_ndi->find_destroy(find_); find_ = nullptr; }
+    return info.Env().Undefined();
+  }
+  NDIlib_find_instance_t find_ = nullptr;
+};
+
+// --- Receiver: background thread pulls video from one NDI source as BGRA/BGRX;
+// JS polls read() for the latest frame (returns null if nothing new). ---
+class Receiver : public Napi::ObjectWrap<Receiver> {
+ public:
+  static Napi::Function Init(Napi::Env env) {
+    return DefineClass(env, "Receiver", {
+      InstanceMethod("read", &Receiver::Read),
+      InstanceMethod("stats", &Receiver::Stats),
+      InstanceMethod("destroy", &Receiver::Destroy),
+    });
+  }
+  // new Receiver(fullSourceName, { lowBandwidth?: boolean })
+  explicit Receiver(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Receiver>(info) {
+    Napi::Env env = info.Env();
+    if (!LoadNdi()) { Napi::Error::New(env, g_loadError).ThrowAsJavaScriptException(); return; }
+    if (info.Length() < 1 || !info[0].IsString()) {
+      Napi::TypeError::New(env, "Receiver(sourceName)").ThrowAsJavaScriptException();
+      return;
+    }
+    name_ = info[0].As<Napi::String>().Utf8Value();
+    bool low = false;
+    if (info.Length() > 1 && info[1].IsObject()) {
+      auto o = info[1].As<Napi::Object>();
+      if (o.Has("lowBandwidth")) low = o.Get("lowBandwidth").ToBoolean();
+    }
+    NDIlib_source_t src{};
+    src.p_ndi_name = name_.c_str();
+    NDIlib_recv_create_v3_t rc{};
+    rc.source_to_connect_to = src;
+    rc.color_format = NDIlib_recv_color_format_BGRX_BGRA;
+    rc.bandwidth = low ? NDIlib_recv_bandwidth_lowest : NDIlib_recv_bandwidth_highest;
+    rc.allow_video_fields = false;
+    rc.p_ndi_recv_name = "GMeet ISO camera input";
+    recv_ = g_ndi->recv_create_v3(&rc);
+    if (!recv_) { Napi::Error::New(env, "NDI recv_create failed").ThrowAsJavaScriptException(); return; }
+    running_ = true;
+    worker_ = std::thread([this] { Run(); });
+  }
+  ~Receiver() override { Shutdown(); }
+
+ private:
+  void Run() {
+    while (running_) {
+      NDIlib_video_frame_v2_t v{};
+      auto t = g_ndi->recv_capture_v2(recv_, &v, nullptr, nullptr, 100);
+      if (t != NDIlib_frame_type_video) continue;
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        const size_t rowBytes = static_cast<size_t>(v.xres) * 4;
+        buf_.resize(rowBytes * v.yres);
+        for (int y = 0; y < v.yres; y++)
+          std::memcpy(buf_.data() + rowBytes * y, v.p_data + static_cast<size_t>(v.line_stride_in_bytes) * y, rowBytes);
+        w_ = v.xres;
+        h_ = v.yres;
+        bgrx_ = v.FourCC == NDIlib_FourCC_video_type_BGRX;
+        seq_++;
+      }
+      g_ndi->recv_free_video_v2(recv_, &v);
+    }
+  }
+  // read(): { width, height, format: 'BGRA'|'BGRX', data: ArrayBuffer } | null
+  Napi::Value Read(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    std::lock_guard<std::mutex> lk(mu_);
+    if (seq_ == readSeq_ || buf_.empty()) return env.Null();
+    readSeq_ = seq_;
+    auto ab = Napi::ArrayBuffer::New(env, buf_.size());
+    std::memcpy(ab.Data(), buf_.data(), buf_.size());
+    auto o = Napi::Object::New(env);
+    o.Set("width", w_);
+    o.Set("height", h_);
+    o.Set("format", bgrx_ ? "BGRX" : "BGRA");
+    o.Set("data", ab);
+    return o;
+  }
+  Napi::Value Stats(const Napi::CallbackInfo& info) {
+    auto o = Napi::Object::New(info.Env());
+    o.Set("name", name_);
+    o.Set("frames", static_cast<double>(seq_));
+    o.Set("width", w_);
+    o.Set("height", h_);
+    o.Set("connected", recv_ ? g_ndi->recv_get_no_connections(recv_) > 0 : false);
+    return o;
+  }
+  Napi::Value Destroy(const Napi::CallbackInfo& info) {
+    Shutdown();
+    return info.Env().Undefined();
+  }
+  void Shutdown() {
+    if (running_.exchange(false) && worker_.joinable()) worker_.join();
+    if (recv_) { g_ndi->recv_destroy(recv_); recv_ = nullptr; }
+  }
+  std::string name_;
+  NDIlib_recv_instance_t recv_ = nullptr;
+  std::thread worker_;
+  std::atomic<bool> running_{false};
+  std::mutex mu_;
+  std::vector<uint8_t> buf_;
+  int w_ = 0, h_ = 0;
+  bool bgrx_ = false;
+  uint64_t seq_ = 0, readSeq_ = 0;
+};
+
 Napi::Object InitModule(Napi::Env env, Napi::Object exports) {
   exports.Set("load", Napi::Function::New(env, Load));
   exports.Set("findSources", Napi::Function::New(env, FindSources));
   exports.Set("receiveFrame", Napi::Function::New(env, ReceiveFrame));
   exports.Set("Sender", Sender::Init(env));
+  exports.Set("Finder", Finder::Init(env));
+  exports.Set("Receiver", Receiver::Init(env));
   return exports;
 }
 
