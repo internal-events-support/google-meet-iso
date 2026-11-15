@@ -127,17 +127,53 @@ function renderFeeds(feeds: FeedState[]): void {
   });
 }
 
-// ---------------- phase / header ----------------
-const PHASE_TEXT: Record<MeetPhase, [string, string]> = {
-  loading: ['Loading…', ''],
-  'signed-out': ['Signed out', 'bad'],
-  home: ['Ready', ''],
-  'green-room': ['Joining…', 'warn'],
-  waiting: ['Waiting to be admitted', 'warn'],
-  'in-call': ['In call', 'ok'],
-  denied: ['Could not join', 'bad'],
-  ended: ['Call ended', ''],
-};
+// ---------------- meeting bar ----------------
+let inCallSince = 0;
+
+function meetingCode(url: string): string {
+  return url.match(/[a-z]{3}-[a-z]{4}-[a-z]{3}/)?.[0] ?? '';
+}
+
+function fmtDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const hh = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function renderMeetingBar(phase: MeetPhase, url: string, detail: string): void {
+  const bar = $('meetingBar');
+  const onMeetingPage = !!meetingCode(url);
+  const state =
+    phase === 'in-call'
+      ? 'live'
+      : phase === 'waiting'
+        ? 'waiting'
+        : phase === 'green-room' || (phase === 'loading' && onMeetingPage)
+          ? 'joining'
+          : 'idle';
+  if (state === 'live' && !inCallSince) inCallSince = Date.now();
+  if (state !== 'live') inCallSince = 0;
+  bar.dataset.state = state;
+  $('callLabel').textContent = state === 'live' ? 'Live' : state === 'waiting' ? 'Waiting for host to admit' : 'Joining';
+  $('callCode').textContent = meetingCode(url);
+  $('callTimer').textContent = state === 'live' ? fmtDuration(Date.now() - inCallSince) : '';
+  $('leaveBtn').textContent = state === 'live' ? 'Leave' : 'Cancel';
+
+  const signedOut = phase === 'signed-out';
+  $('signInBtn').hidden = !signedOut;
+  $('joinBtn').hidden = signedOut;
+  $<HTMLInputElement>('meetUrl').disabled = signedOut;
+
+  // Short notice only for outcomes the operator must act on.
+  const notice = $('notice');
+  const msg =
+    phase === 'denied' ? detail || 'The meeting refused the bot' : phase === 'ended' ? 'Call ended' : signedOut ? 'Sign in with the bot account' : '';
+  notice.hidden = !msg;
+  notice.textContent = msg;
+  notice.className = `notice ${phase === 'denied' || signedOut ? 'bad' : ''}`;
+}
 
 function renderState(s: MeetState): void {
   lastState = s;
@@ -147,13 +183,7 @@ function renderState(s: MeetState): void {
   ndi.textContent = s.ndi.ok ? '' : `NDI unavailable: ${s.ndi.error ?? 'unknown error'}`;
   ndi.className = 'pill bad';
 
-  const [label, cls] = PHASE_TEXT[s.phase] ?? [s.phase, ''];
-  $('phase').className = `phase ${cls}`;
-  $('phaseText').textContent = s.phaseDetail && s.phase !== 'in-call' ? `${label} — ${s.phaseDetail}` : label;
-  $('signInBtn').hidden = s.phase !== 'signed-out';
-  const active = s.phase === 'in-call' || s.phase === 'waiting' || s.phase === 'green-room';
-  $('leaveBtn').hidden = !active;
-  $('joinBtn').hidden = active;
+  renderMeetingBar(s.phase, s.url, s.phaseDetail);
 
   renderFeeds(s.feeds);
   const empty = $('empty');
@@ -250,8 +280,12 @@ async function init(): Promise<void> {
     try {
       await api.join($<HTMLInputElement>('meetUrl').value);
     } catch (e) {
-      appendLog(String((e as Error).message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
-      $('phaseText').textContent = 'Enter a valid Meet link or code';
+      const msg = String((e as Error).message).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      appendLog(msg);
+      const n = $('notice');
+      n.hidden = false;
+      n.className = 'notice bad';
+      n.textContent = 'Not a valid Meet link or code';
     }
   };
   $('joinBtn').addEventListener('click', join);
@@ -290,6 +324,10 @@ async function init(): Promise<void> {
     renderMicSelect();
   });
   setInterval(() => void refreshNdi(), 10000);
+  // Keep the call timer ticking between state updates.
+  setInterval(() => {
+    if (inCallSince) $('callTimer').textContent = fmtDuration(Date.now() - inCallSince);
+  }, 1000);
 }
 
 void init();

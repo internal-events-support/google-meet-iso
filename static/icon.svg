@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>GMeet ISO</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2533"/>
+      <stop offset="1" stop-color="#0b0e13"/>
+    </linearGradient>
+    <linearGradient id="hot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8ff7"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <clipPath id="t1"><rect x="90" y="126" width="156" height="120" rx="20"/></clipPath>
+    <clipPath id="t2"><rect x="266" y="126" width="156" height="120" rx="20"/></clipPath>
+    <clipPath id="t3"><rect x="90" y="266" width="156" height="120" rx="20"/></clipPath>
+    <clipPath id="t4"><rect x="266" y="266" width="156" height="120" rx="20"/></clipPath>
+  </defs>
+
+  <!-- app tile -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="3"/>
+
+  <!-- ISO grid: idle tiles -->
+  <g fill="#2a3342">
+    <rect x="266" y="126" width="156" height="120" rx="20"/>
+    <rect x="90" y="266" width="156" height="120" rx="20"/>
+    <rect x="266" y="266" width="156" height="120" rx="20"/>
+  </g>
+  <g fill="#5b6b84">
+    <g clip-path="url(#t2)"><circle cx="344" cy="176" r="21"/><ellipse cx="344" cy="248" rx="46" ry="36"/></g>
+    <g clip-path="url(#t3)"><circle cx="168" cy="316" r="21"/><ellipse cx="168" cy="388" rx="46" ry="36"/></g>
+    <g clip-path="url(#t4)"><circle cx="344" cy="316" r="21"/><ellipse cx="344" cy="388" rx="46" ry="36"/></g>
+  </g>
+
+  <!-- isolated / on-air tile -->
+  <rect x="82" y="118" width="172" height="136" rx="27" fill="none" stroke="#ff2d2d" stroke-width="8"/>
+  <rect x="90" y="126" width="156" height="120" rx="20" fill="url(#hot)"/>
+  <g clip-path="url(#t1)" fill="#eaf1ff">
+    <circle cx="168" cy="176" r="21"/>
+    <ellipse cx="168" cy="248" rx="46" ry="36"/>
+  </g>
+  <circle cx="224" cy="148" r="9" fill="#ff2d2d"/>
+</svg>

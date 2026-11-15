@@ -10,7 +10,8 @@
     "start": "npm run build:ts && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "mock": "npm run build:ts && cross-env-shell GMEET_ISO_MOCK=1 electron .",
-    "verify:ndi": "node scripts/verify-ndi.js"
+    "verify:ndi": "node scripts/verify-ndi.js",
+    "icons": "electron scripts/build-icons.js"
   },
   "license": "UNLICENSED",
   "type": "commonjs",

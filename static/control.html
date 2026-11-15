@@ -8,14 +8,24 @@
 </head>
 <body>
 <header>
-  <div class="brand">GMeet <b>ISO</b></div>
-  <div class="meeting">
-    <input id="meetUrl" placeholder="Meet link or code — abc-defg-hij" spellcheck="false" />
-    <button id="joinBtn" class="primary">Join</button>
-    <button id="leaveBtn" class="danger" hidden>Leave</button>
+  <div class="brand"><img src="icon.svg" alt="" />GMeet <b>ISO</b></div>
+  <div class="meeting" id="meetingBar" data-state="idle">
+    <!-- idle: link entry -->
+    <div class="entry">
+      <input id="meetUrl" placeholder="Paste a Meet link or code" spellcheck="false" />
+      <button id="joinBtn" class="primary">Join</button>
+      <button id="signInBtn" class="primary" hidden>Sign in to Google</button>
+    </div>
+    <!-- joining / waiting / in call: live call bar -->
+    <div class="call">
+      <span class="indicator"></span>
+      <span class="call-label" id="callLabel"></span>
+      <span class="call-code" id="callCode"></span>
+      <span class="call-timer" id="callTimer"></span>
+      <button id="leaveBtn" class="danger">Leave</button>
+    </div>
   </div>
-  <div id="phase" class="phase"><span class="dot"></span><span id="phaseText">Starting…</span></div>
-  <button id="signInBtn" class="primary" hidden>Sign in to Google</button>
+  <div id="notice" class="notice" hidden></div>
   <div id="ndiStatus" class="pill bad" hidden></div>
 </header>
 

@@ -77,6 +77,7 @@ function createControlWindow(): void {
     minWidth: 1000,
     minHeight: 640,
     title: 'GMeet ISO',
+    icon: path.join(__dirname, '..', '..', 'static', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     backgroundColor: '#0d0f12',
     webPreferences: {
       preload: path.join(__dirname, '..', 'control', 'preload.js'),
@@ -158,6 +159,7 @@ function openSignIn(): void {
     parent: controlWin ?? undefined,
     modal: false,
     title: 'Sign in to Google',
+    icon: path.join(__dirname, '..', '..', 'static', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: { partition: MEET_PARTITION, contextIsolation: true, sandbox: true },
   });
