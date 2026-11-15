@@ -9,7 +9,6 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 "Sego
 
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .brand { font-size: 16px; font-weight: 500; white-space: nowrap; display: flex; align-items: center; gap: 8px; } .brand b { color: var(--accent); }
-.brand img { width: 26px; height: 26px; }
 
 /* Meeting bar: link entry when idle, live call status when joining / waiting / in call. */
 .meeting { flex: 1; max-width: 680px; }
