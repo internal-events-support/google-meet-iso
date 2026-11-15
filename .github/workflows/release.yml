@@ -18,6 +18,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       NDI_SDK_DIR: C:\NDI6SDK
@@ -39,12 +40,19 @@ jobs:
 
       # The addon only needs the NDI headers at build time; the runtime is loaded
       # dynamically on the user's machine (NDI Tools / NDI Runtime).
-      - name: Install NDI 6 SDK (headers)
+      # Unpack the Inno Setup installer with innoextract (running it silently hangs on CI).
+      - name: Fetch NDI 6 SDK (headers)
         shell: pwsh
+        timeout-minutes: 10
         run: |
+          choco install innoextract -y --no-progress
           Invoke-WebRequest -Uri 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe' -OutFile ndi-sdk.exe
-          Start-Process -Wait -FilePath .\ndi-sdk.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=$env:NDI_SDK_DIR"
-          if (-not (Test-Path "$env:NDI_SDK_DIR\Include\Processing.NDI.Lib.h")) { throw 'NDI SDK headers not found' }
+          innoextract -s -d ndi-x ndi-sdk.exe
+          $h = Get-ChildItem -Recurse ndi-x -Filter Processing.NDI.Lib.h | Select-Object -First 1
+          if (-not $h) { throw 'NDI SDK headers not found' }
+          New-Item -ItemType Directory -Force $env:NDI_SDK_DIR | Out-Null
+          Copy-Item -Recurse $h.Directory.FullName "$env:NDI_SDK_DIR\Include"
+          Get-ChildItem "$env:NDI_SDK_DIR\Include"
 
       - run: npm ci
       - run: npm run typecheck
