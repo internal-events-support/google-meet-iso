@@ -1,0 +1,66 @@
+# Builds the Windows installer + portable zip and publishes a GitHub Release
+# whenever a version tag (v*.*.*) is pushed. Cut a version with:
+#   npm version <patch|minor|major|x.y.z> && git push --follow-tags
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build, e.g. v1.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      NDI_SDK_DIR: C:\NDI6SDK
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check tag matches package.json version
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "$TAG" ] || { echo "::error::Tag $TAG != package.json v$v"; exit 1; }
+
+      # The addon only needs the NDI headers at build time; the runtime is loaded
+      # dynamically on the user's machine (NDI Tools / NDI Runtime).
+      - name: Install NDI 6 SDK (headers)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe' -OutFile ndi-sdk.exe
+          Start-Process -Wait -FilePath .\ndi-sdk.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=$env:NDI_SDK_DIR"
+          if (-not (Test-Path "$env:NDI_SDK_DIR\Include\Processing.NDI.Lib.h")) { throw 'NDI SDK headers not found' }
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node scripts/test-osc.js
+
+      - name: Build installer
+        run: npm run dist
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(release/*.exe release/*.zip release/*.blockmap)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --title "GMeet ISO $TAG" --generate-notes
+          fi

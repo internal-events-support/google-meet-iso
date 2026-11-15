@@ -1,6 +1,6 @@
 {
   "name": "gmeet-iso",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Zoom-ISO-style per-participant NDI feeds for Google Meet",
   "main": "dist/main/main.js",
   "scripts": {
@@ -13,7 +13,8 @@
     "verify:ndi": "node scripts/verify-ndi.js",
     "icons": "electron scripts/build-icons.js",
     "build:ui": "node scripts/build-ui.js",
-    "watch:ui": "node scripts/build-ui.js --watch"
+    "watch:ui": "node scripts/build-ui.js --watch",
+    "dist": "npm run build && electron-builder --win --publish never"
   },
   "license": "UNLICENSED",
   "type": "commonjs",
@@ -22,6 +23,7 @@
     "@types/ws": "^8.18.2",
     "cross-env": "^10.1.0",
     "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.25.12",
     "node-gyp": "^11.5.0",
     "typescript": "^7.0.2"
@@ -31,5 +33,46 @@
     "node-addon-api": "^8.9.2",
     "ws": "^8.23.0"
   },
-  "private": true
+  "private": true,
+  "productName": "GMeet ISO",
+  "author": "GMeet ISO",
+  "build": {
+    "appId": "com.gmeetiso.app",
+    "productName": "GMeet ISO",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "static/**/*",
+      "build/Release/*.node",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "build/Release/*.node"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "static/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "artifactName": "GMeet-ISO-${version}-${os}-${arch}.${ext}"
+  }
 }
