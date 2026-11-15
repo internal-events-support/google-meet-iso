@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022  # VS 2022; node-gyp 11 cannot detect VS 2026 on windows-latest
     timeout-minutes: 45
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
