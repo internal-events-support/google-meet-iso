@@ -9,6 +9,10 @@
 //    keeps the renderer's main thread free.
 //  - If no frame arrives for `idleMs` the worker emits a black slate at ~5 fps so
 //    downstream switchers keep a stable source instead of a frozen last frame.
+//  - Cadence clock (setCadence(fpsN, fpsD)): the worker sends at exactly fpsN/fpsD on a
+//    high-resolution timer, using the latest submitted frame and repeating the previous
+//    one when JS had nothing new. JS then only submits when content actually changed.
+//    Only the worker thread ever calls send_send_video_v2 for an instance.
 
 #include <napi.h>
 
@@ -91,8 +95,55 @@ bool ParseFourCC(const std::string& s, NDIlib_FourCC_video_type_e* out, int* bpp
   if (s == "BGRX") { *out = NDIlib_FourCC_video_type_BGRX; *bppNum = 4; *bppDen = 1; return true; }
   if (s == "RGBA") { *out = NDIlib_FourCC_video_type_RGBA; *bppNum = 4; *bppDen = 1; return true; }
   if (s == "RGBX") { *out = NDIlib_FourCC_video_type_RGBX; *bppNum = 4; *bppDen = 1; return true; }
+  if (s == "UYVY") { *out = NDIlib_FourCC_video_type_UYVY; *bppNum = 2; *bppDen = 1; return true; }
+  if (s == "UYVA") { *out = NDIlib_FourCC_video_type_UYVA; *bppNum = 3; *bppDen = 1; return true; }
   return false;
 }
+
+// Bytes needed for a frame: planar 4:2:0 (stride = luma stride), UYVA (UYVY plane of
+// `stride` bytes/row followed by a w*h alpha plane), else packed rows of `stride` bytes.
+size_t FrameBytes(NDIlib_FourCC_video_type_e fourcc, int w, int h, int stride) {
+  if (fourcc == NDIlib_FourCC_video_type_I420 || fourcc == NDIlib_FourCC_video_type_NV12)
+    return static_cast<size_t>(stride) * h * 3 / 2;
+  if (fourcc == NDIlib_FourCC_video_type_UYVA) return static_cast<size_t>(stride) * h + static_cast<size_t>(w) * h;
+  return static_cast<size_t>(stride) * h;
+}
+
+int DefaultStride(NDIlib_FourCC_video_type_e fourcc, int w) {
+  switch (fourcc) {
+    case NDIlib_FourCC_video_type_I420:
+    case NDIlib_FourCC_video_type_NV12: return w;
+    case NDIlib_FourCC_video_type_UYVY:
+    case NDIlib_FourCC_video_type_UYVA: return w * 2;
+    default: return w * 4;
+  }
+}
+
+#ifdef _WIN32
+// Per-thread high-resolution waitable timer (Win10 1803+), falling back to a normal one.
+struct PreciseTimer {
+  HANDLE h = nullptr;
+  PreciseTimer() {
+    h = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /*CREATE_WAITABLE_TIMER_HIGH_RESOLUTION*/, TIMER_ALL_ACCESS);
+    if (!h) h = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+  }
+  ~PreciseTimer() { if (h) CloseHandle(h); }
+  void SleepUntil(std::chrono::steady_clock::time_point t) {
+    auto d = t - std::chrono::steady_clock::now();
+    if (d <= std::chrono::steady_clock::duration::zero()) return;
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(d).count();
+    if (!h) { std::this_thread::sleep_until(t); return; }
+    LARGE_INTEGER due;
+    due.QuadPart = -static_cast<LONGLONG>(us * 10);  // relative, 100 ns units
+    if (SetWaitableTimerEx(h, &due, 0, nullptr, nullptr, nullptr, 0)) WaitForSingleObject(h, INFINITE);
+    else std::this_thread::sleep_until(t);
+  }
+};
+#else
+struct PreciseTimer {
+  void SleepUntil(std::chrono::steady_clock::time_point t) { std::this_thread::sleep_until(t); }
+};
+#endif
 
 struct Frame {
   std::vector<uint8_t> data;
@@ -108,6 +159,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
     return DefineClass(env, "Sender", {
       InstanceMethod("sendVideo", &Sender::SendVideo),
       InstanceMethod("sendAudio", &Sender::SendAudio),
+      InstanceMethod("setCadence", &Sender::SetCadence),
       InstanceMethod("connections", &Sender::Connections),
       InstanceMethod("stats", &Sender::Stats),
       InstanceMethod("destroy", &Sender::Destroy),
@@ -174,8 +226,32 @@ class Sender : public Napi::ObjectWrap<Sender> {
     return Napi::Boolean::New(env, true);
   }
 
-  // sendVideo(data: ArrayBuffer | TypedArray, width, height, format: 'I420'|'NV12'|'BGRA'|..., stride?: number,
-  //           fpsN?: number, fpsD?: number)
+  // setCadence(fpsN, fpsD): fpsN > 0 starts the clocked mode (send the latest frame, or
+  // repeat the previous one, exactly every fpsD/fpsN s); 0 returns to send-on-submit.
+  Napi::Value SetCadence(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    int n = info.Length() > 0 && info[0].IsNumber() ? info[0].As<Napi::Number>().Int32Value() : 0;
+    int d = info.Length() > 1 && info[1].IsNumber() ? info[1].As<Napi::Number>().Int32Value() : 1;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (n > 0 && d > 0) {
+        clockN_ = n;
+        clockD_ = d;
+        fpsN_ = n;
+        fpsD_ = d;
+      } else {
+        clockN_ = 0;
+        clockD_ = 0;
+      }
+      clockChanged_ = true;
+    }
+    cv_.notify_one();
+    return Napi::Boolean::New(env, true);
+  }
+
+  // sendVideo(data: ArrayBuffer | TypedArray, width, height, format: 'I420'|'NV12'|'UYVY'|'UYVA'|'BGRA'|...,
+  //           stride?: number, fpsN?: number, fpsD?: number)
+  // In clocked mode (setCadence) this only submits the frame; the worker sends it on the next tick.
   // For planar formats the buffer must be tightly packed planes (Y, then U, then V / UV)
   // with luma stride = `stride` (default: width) and chroma stride = stride/2 (I420) or stride (NV12).
   Napi::Value SendVideo(const Napi::CallbackInfo& info) {
@@ -209,10 +285,10 @@ class Sender : public Napi::ObjectWrap<Sender> {
       Napi::TypeError::New(env, "unsupported format " + fmt).ThrowAsJavaScriptException();
       return env.Undefined();
     }
-    bool planar = (bd == 2);
+    (void)bn; (void)bd;
     int stride = (info.Length() > 4 && info[4].IsNumber()) ? info[4].As<Napi::Number>().Int32Value()
-                                                          : (planar ? w : w * 4);
-    size_t need = planar ? static_cast<size_t>(stride) * h * 3 / 2 : static_cast<size_t>(stride) * h;
+                                                          : DefaultStride(fourcc, w);
+    size_t need = FrameBytes(fourcc, w, h, stride);
     if (w <= 0 || h <= 0 || len < need) {
       Napi::RangeError::New(env, "buffer too small for frame").ThrowAsJavaScriptException();
       return env.Undefined();
@@ -226,7 +302,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
       pending_.height = h;
       pending_.stride = stride;
       pending_.fourcc = fourcc;
-      if (info.Length() > 6 && info[5].IsNumber() && info[6].IsNumber()) {
+      if (clockN_ == 0 && info.Length() > 6 && info[5].IsNumber() && info[6].IsNumber()) {
         fpsN_ = info[5].As<Napi::Number>().Int32Value();
         fpsD_ = info[6].As<Napi::Number>().Int32Value();
       }
@@ -248,6 +324,9 @@ class Sender : public Napi::ObjectWrap<Sender> {
     o.Set("received", static_cast<double>(received_.load()));
     o.Set("sent", static_cast<double>(sent_.load()));
     o.Set("dropped", static_cast<double>(dropped_.load()));
+    o.Set("repeated", static_cast<double>(repeated_.load()));
+    o.Set("late", static_cast<double>(late_.load()));
+    o.Set("clocked", clockN_ != 0);
     o.Set("slate", slating_.load());
     o.Set("width", lastW_.load());
     o.Set("height", lastH_.load());
@@ -302,15 +381,77 @@ class Sender : public Napi::ObjectWrap<Sender> {
     g_ndi->send_send_video_v2(send_, &f);  // synchronous: buffer may be reused after return
   }
 
+  // Clocked mode: one send per tick at fpsN/fpsD; returns when the cadence is turned off.
+  void RunClocked() {
+    using namespace std::chrono;
+    PreciseTimer timer;
+    int n = 0, d = 1;
+    steady_clock::time_point start;
+    int64_t tick = 0;
+    bool haveCur = false;
+    while (running_) {
+      {
+        std::unique_lock<std::mutex> lk(mu_);
+        if (clockN_ == 0) return;
+        if (clockChanged_ || n == 0) {
+          clockChanged_ = false;
+          n = clockN_;
+          d = clockD_;
+          start = steady_clock::now();
+          tick = 0;
+        }
+        if (hasPending_) {
+          std::swap(current_, pending_);
+          hasPending_ = false;
+          haveCur = true;
+          sentNew_ = true;
+        }
+      }
+      if (haveCur && !current_.data.empty()) {
+        Emit(current_.data.data(), current_.width, current_.height, current_.stride, current_.fourcc);
+        lastW_ = current_.width;
+        lastH_ = current_.height;
+        slating_ = false;
+        sent_++;
+        if (!sentNew_) repeated_++;
+        sentNew_ = false;
+      }
+      tick++;
+      // Deadline of the next tick, computed from the start to avoid drift (integer ns).
+      auto due = start + nanoseconds(static_cast<int64_t>(tick * 1000000000LL * d / n));
+      auto now = steady_clock::now();
+      if (now > due + nanoseconds(1000000000LL * d / n * 4)) {
+        // Far behind (suspend/hiccup): resync rather than bursting.
+        late_++;
+        start = now;
+        tick = 0;
+        continue;
+      }
+      if (now > due) { late_++; continue; }
+      timer.SleepUntil(due);
+    }
+  }
+
   void Run() {
     using namespace std::chrono;
     Frame work;
     auto lastSlate = steady_clock::now() - hours(1);
     while (running_) {
       bool have = false;
+      bool clocked = false;
       {
         std::unique_lock<std::mutex> lk(mu_);
-        cv_.wait_for(lk, milliseconds(100), [this] { return hasPending_ || !running_; });
+        clocked = clockN_ != 0;
+      }
+      if (clocked) {
+        RunClocked();
+        lastFrameAt_ = steady_clock::now();
+        continue;
+      }
+      {
+        std::unique_lock<std::mutex> lk(mu_);
+        cv_.wait_for(lk, milliseconds(100), [this] { return hasPending_ || !running_ || clockN_ != 0; });
+        if (clockN_ != 0) continue;
         if (!running_) break;
         if (hasPending_) {
           std::swap(work, pending_);
@@ -348,10 +489,14 @@ class Sender : public Napi::ObjectWrap<Sender> {
   std::mutex mu_;
   std::condition_variable cv_;
   Frame pending_;
+  Frame current_;  // worker-only: the frame repeated by the cadence clock
   bool hasPending_ = false;
+  int clockN_ = 0, clockD_ = 0;  // guarded by mu_
+  bool clockChanged_ = false;
+  bool sentNew_ = false;
   std::chrono::steady_clock::time_point lastFrameAt_;
 
-  std::atomic<uint64_t> received_{0}, sent_{0}, dropped_{0};
+  std::atomic<uint64_t> received_{0}, sent_{0}, dropped_{0}, repeated_{0}, late_{0};
   std::atomic<int> lastW_{0}, lastH_{0};
   std::atomic<bool> slating_{false};
 };

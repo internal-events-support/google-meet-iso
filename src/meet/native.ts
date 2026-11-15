@@ -7,12 +7,20 @@ export interface SenderStats {
   slate: boolean;
   dropped: number;
   sent: number;
+  /** Frames re-sent by the cadence clock because nothing new was submitted. */
+  repeated?: number;
+  /** Cadence ticks that ran late. */
+  late?: number;
+  /** setCadence() is active. */
+  clocked?: boolean;
   width: number;
   height: number;
 }
 
 export interface NativeSender {
   sendVideo(data: ArrayBuffer | Uint8Array, w: number, h: number, fmt: string, stride?: number, fpsN?: number, fpsD?: number): boolean;
+  /** fpsN > 0: send the latest submitted frame (repeating it if nothing new) at exactly fpsN/fpsD. 0 = send on submit. */
+  setCadence(fpsN: number, fpsD: number): boolean;
   sendAudio(planar: Float32Array, sampleRate: number, channels: number, samplesPerChannel: number): boolean;
   stats(): SenderStats;
   destroy(): void;

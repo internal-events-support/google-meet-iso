@@ -575,7 +575,7 @@ async function expandWaitingList(): Promise<void> {
   if (view) {
     view.click();
     for (let i = 0; i < 10 && !waitingRows().length; i++) await sleep(150);
-  } else ensurePeoplePanel();
+  } else ensurePeoplePanel(8000); // [quality-agent]
 }
 
 /** Click Meet's Admit / Admit all (who = undefined or 'all'), or Admit for one named person. */
@@ -689,17 +689,63 @@ function peopleButton(): HTMLElement | null {
   return null;
 }
 
-export function rosterOpen(): boolean {
-  return !!document.querySelector('[role="list"][aria-label="Participants" i]');
+// [quality-agent] The People panel is no longer kept open: an open side panel shrinks the video
+// grid, and Meet picks each feed's simulcast layer from the rendered tile size. Once opened, Meet
+// keeps the roster list in the DOM (hidden, still updated) after the panel is closed, so we open it
+// briefly to (re)build the list, then close it again. Host actions re-open it for a few seconds.
+function rosterList(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[role="list"][aria-label="Participants" i]');
 }
 
-/** Open the People panel if no roster is in the DOM (returns true if it is/was opened). */
-export function ensurePeoplePanel(): boolean {
-  if (rosterOpen()) return true;
-  const b = peopleButton();
-  if (!b) return false;
-  b.click();
+/** True when the People panel is actually shown (the list can stay in the DOM while hidden). */
+export function rosterOpen(): boolean {
+  const l = rosterList();
+  return !!l && isVisible(l);
+}
+
+let panelCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let panelOpenedByUs = false;
+let lastPanelRefresh = 0;
+const PANEL_REFRESH_MS = 25000;
+
+function closePeoplePanel(): void {
+  panelCloseTimer = null;
+  if (!panelOpenedByUs) return;
+  panelOpenedByUs = false;
+  let p: HTMLElement | null = rosterList();
+  if (!p || !isVisible(p)) return;
+  while (p) {
+    const c = Array.from(p.querySelectorAll<HTMLElement>('button, [role="button"]')).find((b) => /^close$/i.test(cleanName(b.getAttribute('aria-label'))) && isVisible(b));
+    if (c) {
+      c.click();
+      return;
+    }
+    p = p.parentElement;
+  }
+}
+
+/**
+ * Show the People panel for `holdMs` (then close it again if we opened it). Returns true if the
+ * panel is/was opened. Pass holdMs = 0 to leave it open (old behaviour).
+ */
+export function ensurePeoplePanel(holdMs = 1500): boolean {
+  lastPanelRefresh = Date.now();
+  if (!rosterOpen()) {
+    const b = peopleButton();
+    if (!b) return false;
+    b.click();
+    panelOpenedByUs = true;
+  }
+  if (panelCloseTimer) clearTimeout(panelCloseTimer);
+  panelCloseTimer = holdMs > 0 && panelOpenedByUs ? setTimeout(closePeoplePanel, holdMs) : null;
   return true;
+}
+
+/** Open the panel (if needed) and wait for its rows to render, for host actions. */
+async function withPeoplePanel(holdMs = 8000): Promise<void> {
+  const wasOpen = rosterOpen();
+  if (!ensurePeoplePanel(holdMs)) return;
+  if (!wasOpen) await sleep(500);
 }
 
 function rowMuted(row: HTMLElement): boolean | null {
@@ -719,6 +765,8 @@ function rowHandRaised(row: HTMLElement): boolean {
 
 /** Everyone listed in the People panel (empty when the panel isn't open). Deduplicated by id. */
 export function scrapeRoster(): RosterEntry[] {
+  // [quality-agent] Periodically flash the panel so the (hidden) roster list stays fresh.
+  if (!rosterOpen() && Date.now() - lastPanelRefresh > PANEL_REFRESH_MS && inCall()) ensurePeoplePanel();
   const out = new Map<string, RosterEntry>();
   for (const row of Array.from(document.querySelectorAll<HTMLElement>(ROSTER_ROW))) {
     const participantId = row.getAttribute('data-participant-id') ?? '';
@@ -781,6 +829,7 @@ function menuLabel(e: HTMLElement): string {
  * after the first one is skipped only when `optional` (Meet sometimes has no submenu).
  */
 async function participantMenu(participantId: string, displayName: string, steps: RegExp[], optionalTail = false): Promise<string | null> {
+  await withPeoplePanel(); // [quality-agent] roster rows are hidden while the panel is closed
   const triggers: HTMLElement[] = [];
   const rb = rosterRow(participantId)?.querySelector<HTMLElement>('[aria-label="More actions"], [aria-haspopup="menu"]');
   if (rb) triggers.push(rb);
@@ -886,6 +935,7 @@ export async function lowerHand(participantId?: string, displayName?: string): P
     }
     throw new Error('No raised hands to lower');
   }
+  await withPeoplePanel(); // [quality-agent]
   const btn = rosterRow(participantId)?.querySelector<HTMLElement>('[aria-label*="lower" i][aria-label*="hand" i]');
   if (btn) {
     btn.click();
@@ -898,7 +948,7 @@ export async function lowerHand(participantId?: string, displayName?: string): P
 
 /** Host action: "Mute all" in the People panel. */
 export async function muteAll(): Promise<boolean> {
-  ensurePeoplePanel();
+  await withPeoplePanel(); // [quality-agent]
   await sleep(300);
   const b = buttonByLabel(/^mute (all|everyone)$/i);
   if (!b) throw new Error('Mute all is not available (nobody is unmuted, or the bot is not host)');
@@ -909,6 +959,7 @@ export async function muteAll(): Promise<boolean> {
 
 /** Host action: mute one participant from their roster row (works for people without a tile). */
 export async function muteRosterParticipant(participantId: string): Promise<boolean> {
+  await withPeoplePanel(); // [quality-agent]
   const row = rosterRow(participantId);
   const b = row ? Array.from(row.querySelectorAll<HTMLElement>('[aria-label]')).find((e) => /^mute .*microphone/i.test(e.getAttribute('aria-label') ?? '')) : null;
   if (!b) return false;

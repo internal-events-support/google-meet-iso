@@ -162,6 +162,10 @@ function initFinder(): void {
 // ---------- windows ----------
 let controlWin: BrowserWindow | null = null;
 let meetWin: BrowserWindow | null = null;
+/** [quality-agent] Page zoom of the hidden Meet window (= devicePixelRatio Meet sees). */
+// 2x zoom (DPR 2) + a 4K window was measured to cut capture to 1-8 fps and add ~200 ms latency for no
+// resolution gain (Meet picks the layer from layout, not DPR). Keep 1.
+const MEET_ZOOM = 1;
 let signInWin: BrowserWindow | null = null;
 const displayWins = new Map<string, { win: BrowserWindow; key: string }>();
 let lastDevices: DeviceLists = { videoInputs: [], audioInputs: [], audioOutputs: [] };
@@ -310,9 +314,20 @@ function ensureMeetWindow(): BrowserWindow {
       backgroundThrottling: false,
       offscreen: true,
       autoplayPolicy: 'no-user-gesture-required',
+      zoomFactor: MEET_ZOOM, // [quality-agent]
     },
   });
   const wc = meetWin.webContents;
+  // [quality-agent] Render Meet at 2x zoom: window.devicePixelRatio becomes 2 (Chromium folds page
+  // zoom into DPR, also for offscreen windows) and the CSS viewport is half the window size. Meet
+  // requests each remote simulcast layer from tile size x DPR, so this asks for the 720p layer
+  // where a 1x tile of the same pixel size only got 360p. Zoom is per-origin and can be reset by
+  // navigation, so re-apply it on every load.
+  const applyZoom = () => {
+    if (!wc.isDestroyed() && Math.abs(wc.getZoomFactor() - MEET_ZOOM) > 0.01) wc.setZoomFactor(MEET_ZOOM);
+  };
+  wc.on('did-finish-load', applyZoom);
+  wc.on('did-navigate-in-page', applyZoom);
   wc.setFrameRate(30);
   wc.setAudioMuted(settings.muteLocalAudio);
   // Meet asks "Leave site?" on navigation; never let that block us.

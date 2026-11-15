@@ -61,15 +61,25 @@ export function installMediaShim(): void {
   // Inbound bitrate for the status bar.
   let lastBytes = 0;
   let lastAt = 0;
+  // [quality-agent] Also publish per-stream video quality (what Meet actually sends us, and why our
+  // own send is limited) on <html data-gmeet-iso-rtc-video>; window.__gmeetIsoPcs for eval debugging.
+  (window as unknown as Record<string, unknown>).__gmeetIsoPcs = pcs;
   setInterval(async () => {
     let bytes = 0;
+    const video: Record<string, unknown>[] = [];
     for (const pc of pcs) {
       if (pc.connectionState === 'closed') continue;
       const stats = await pc.getStats();
-      stats.forEach((st: { type: string; bytesReceived?: number }) => {
+      stats.forEach((st: Record<string, unknown> & { type: string; bytesReceived?: number }) => {
         if (st.type === 'transport' && st.bytesReceived) bytes += st.bytesReceived;
+        if (st.kind !== 'video') return;
+        if (st.type === 'inbound-rtp' && st.frameWidth)
+          video.push({ dir: 'in', ssrc: st.ssrc, track: st.trackIdentifier, w: st.frameWidth, h: st.frameHeight, fps: st.framesPerSecond, codec: stats.get(st.codecId as string)?.mimeType, decoder: st.decoderImplementation, dropped: st.framesDropped });
+        else if (st.type === 'outbound-rtp')
+          video.push({ dir: 'out', rid: st.rid, w: st.frameWidth, h: st.frameHeight, fps: st.framesPerSecond, active: st.active, limit: st.qualityLimitationReason, encoder: st.encoderImplementation });
       });
     }
+    document.documentElement?.setAttribute('data-gmeet-iso-rtc-video', JSON.stringify(video));
     const now = performance.now();
     if (lastAt) document.documentElement?.setAttribute('data-gmeet-iso-rx-mbps', (((bytes - lastBytes) * 8) / ((now - lastAt) * 1000)).toFixed(2));
     lastBytes = bytes;

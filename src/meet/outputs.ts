@@ -1,8 +1,11 @@
 // Output slots: a stable NDI source each, fed from whichever participant the slot is
 // routed to. Two render paths:
 //   - passthrough (format = native, no effects): copy Meet's decoded frames as-is (I420/NV12)
-//   - canvas (fixed format and/or effects): draw at a fixed cadence into an OffscreenCanvas
-//     (letterbox/scale, colour, crop/zoom, mirror, name tag) and read back BGRA.
+//   - canvas (fixed format and/or effects): draw into an OffscreenCanvas (letterbox/scale,
+//     colour, crop/zoom, mirror, name tag) only when the content changes (new source frame,
+//     config/effects/loss change), convert to UYVY on the GPU and read it back
+//     asynchronously (gpureadback.ts; BGRA when alpha is needed). The native sender's
+//     cadence clock emits at exactly the configured rate, repeating the last frame.
 // When the source has no video, the slot renders its loss mode (black/freeze/transparent/
 // image/testcard/profilePicture) so downstream switchers always see a stable signal, after
 // the global video-loss delay (hold the last frame until then).
@@ -19,8 +22,11 @@ import { Thumbnailer } from './camsource';
 import type { NativeNdi, NativeSender } from './native';
 import type { SourceTap } from './sources';
 import { Recorder } from './recorder';
+import { GpuReadback, type PackFormat } from './gpureadback';
 
 const LOSS_FPS = 10;
+/** Canvas outputs: housekeeping rate for loss/effects changes (source frames render on arrival). */
+const HOUSEKEEPING_HZ = 20;
 
 /** Numeric ProcAmp fields that are neutral at their DEFAULT_EFFECTS value. */
 const NEUTRAL_KEYS: (keyof OutputEffects)[] = [
@@ -129,12 +135,17 @@ export class OutputPipeline {
   private canvas: OffscreenCanvas | null = null;
   private ctx: OffscreenCanvasRenderingContext2D | null = null;
   private timer = 0;
-  private tickCount = 0;
-  private tickStart = 0;
   private readbackBusy = false;
   private hasDrawnSource = false;
-  /** Last rendered BGRA frame + what it showed; re-sent when nothing changed (cheap ticks). */
-  private cache: { buf: ArrayBuffer; key: string; w: number; h: number } | null = null;
+  /** Content key of the last frame drawn; nothing is redrawn until it changes. */
+  private renderedKey = '';
+  /** A render was requested while a readback was in flight. */
+  private renderPending = false;
+  private pollTimer = 0;
+  private gpu: GpuReadback | null = null;
+  private gpuFailed = false;
+  /** Passthrough loss content (re-sent at LOSS_FPS; passthrough senders aren't clocked). */
+  private cache: { buf: ArrayBuffer; key: string; w: number; h: number; fmt: string; stride: number } | null = null;
   private cfgVersion = 0;
   /** Cache key of the content last sent as a preview thumbnail. */
   private previewKey = '';
@@ -148,6 +159,8 @@ export class OutputPipeline {
 
   // stats
   private outTimes: number[] = [];
+  /** Native (clocked) send rate, from sender.stats().sent deltas. */
+  private nativeSent = { n: -1, t: 0, fps: 0 };
   private outW = 0;
   private outH = 0;
   private latency = 0;
@@ -242,25 +255,43 @@ export class OutputPipeline {
       this.sender = new this.env.ndi.Sender(want, { idleMs: 0, ...(groups ? { groups } : {}) });
       this.senderName = want;
       this.env.log(`NDI source up: "${want}"`);
+      this.applyCadence();
     } catch (e) {
       this.nextSenderAttempt = performance.now() + 5000;
       this.env.log(`NDI sender create failed for "${want}": ${(e as Error).message}`);
     }
   }
 
+  private get outFormat(): { width: number; height: number; fpsN: number; fpsD: number } {
+    return this.cfg.format ?? { width: 1280, height: 720, fpsN: 30000, fpsD: 1001 };
+  }
+
+  /** Canvas outputs are clocked natively at the configured rate; passthrough sends on arrival. */
+  private applyCadence(): void {
+    const s = this.sender;
+    if (!s || typeof s.setCadence !== 'function') return;
+    if (this.active && this.canvasMode) {
+      const f = this.outFormat;
+      s.setCadence(f.fpsN, f.fpsD);
+    } else {
+      s.setCadence(0, 0);
+    }
+  }
+
   private reconfigure(): void {
-    window.clearTimeout(this.timer);
+    window.clearInterval(this.timer);
     window.clearInterval(this.lossTimer);
     this.timer = 0;
     this.lossTimer = 0;
     this.ensureSender();
+    this.applyCadence();
+    this.renderedKey = '';
     if (!this.active) return;
     if (this.canvasMode) {
-      const f = this.cfg.format ?? { width: 1280, height: 720, fpsN: 30000, fpsD: 1001 };
+      const f = this.outFormat;
       this.setupCanvas(f.width, f.height);
-      this.tickStart = performance.now();
-      this.tickCount = 0;
-      this.scheduleTick();
+      this.timer = window.setInterval(() => this.canvasTick(), 1000 / HOUSEKEEPING_HZ);
+      this.canvasTick();
     } else {
       // Passthrough: only render loss content when the source stops.
       this.lossTimer = window.setInterval(() => this.passthroughLossTick(), 1000 / LOSS_FPS);
@@ -276,6 +307,11 @@ export class OutputPipeline {
 
   // ---------------- passthrough ----------------
   private onSourceFrame(frame: VideoFrame, arrivedAt: number): void {
+    if (this.active && this.canvasMode) {
+      // Render on arrival (latest frame wins while a readback is in flight).
+      if (this.engine === 'enabled') this.canvasTick();
+      return;
+    }
     if (!this.active || this.canvasMode || this.engine !== 'enabled' || !this.sender || this.inFlight >= 2) return;
     const now = performance.now();
     if (now - this.lastSentAt < 1000 / 61) return;
@@ -362,73 +398,81 @@ export class OutputPipeline {
     const W = this.canvas!.width;
     const H = this.canvas!.height;
     if (this.cache && this.cache.key === key && this.cache.w === W && this.cache.h === H) {
-      this.sender.sendVideo(this.cache.buf, W, H, 'BGRA', W * 4, 10, 1);
+      this.sender.sendVideo(this.cache.buf, W, H, this.cache.fmt, this.cache.stride, LOSS_FPS, 1);
       this.noteOut(W, H, performance.now());
       this.refreshPreview();
       return;
     }
+    if (this.readbackBusy || this.renderedKey === key) return;
+    this.renderedKey = key;
     this.drawLoss();
-    void this.readbackAndSend(performance.now(), 10, 1, key);
+    this.startReadback(performance.now(), key, this.cfg.lossMode === 'transparent', true);
   }
 
   // ---------------- canvas path ----------------
-  private scheduleTick(): void {
-    const f = this.cfg.format ?? { width: 1280, height: 720, fpsN: 30000, fpsD: 1001 };
-    const interval = (1000 * f.fpsD) / f.fpsN;
-    this.tickCount++;
-    const due = this.tickStart + this.tickCount * interval;
-    const delay = Math.max(0, due - performance.now());
-    // If we fell far behind (e.g. a GC pause), resync instead of bursting.
-    if (performance.now() - due > interval * 4) {
-      this.tickStart = performance.now();
-      this.tickCount = 0;
-    }
-    this.timer = window.setTimeout(() => {
-      this.canvasTick();
-      if (this.active && this.canvasMode) this.scheduleTick();
-    }, delay);
-  }
-
+  /**
+   * Draw + read back only when the content changes (new source frame, config/effects,
+   * loss state); otherwise the native cadence clock keeps repeating the last frame.
+   */
   private canvasTick(): void {
+    if (!this.active || !this.canvasMode) return;
     if (!this.sender) this.ensureSender();
     const ctx = this.ctx;
     if (!ctx || !this.canvas) return;
     const cur = this.engine === 'enabled' ? this.source?.current() : null;
     const live = !!cur && this.sourceLive();
-    const f = this.cfg.format ?? { width: this.canvas.width, height: this.canvas.height, fpsN: 30000, fpsD: 1001 };
-    const W = this.canvas.width;
-    const H = this.canvas.height;
-    // What would this tick show? If identical to the cached frame, just re-send it: sources
-    // usually arrive slower than the output rate, and loss content is static.
     // Freeze mode, or still inside the video-loss delay: hold the last source frame.
     const hold = !live && this.hasDrawnSource && this.engine === 'enabled' && (this.cfg.lossMode === 'freeze' || this.inLossDelay());
-    const freeze = hold;
     const tracking = live && !!this.tracker;
     const key = live
       ? `src:${cur!.at}:${this.sourceName}:${this.cfgVersion}:${tracking ? performance.now() : 0}`
-      : freeze
-        ? (this.cache?.key ?? 'freeze')
+      : hold
+        ? this.renderedKey || 'freeze'
         : this.lossKey();
-    // A readback still in flight will send this slot's frame when it completes.
-    if (this.readbackBusy) return;
-    if (this.cache && this.cache.key === key && this.cache.w === W && this.cache.h === H) {
-      this.sender?.sendVideo(this.cache.buf, W, H, 'BGRA', W * 4, f.fpsN, f.fpsD);
-      this.noteOut(W, H, live ? cur!.at : performance.now());
+    if (key === this.renderedKey) {
       this.refreshPreview();
       return;
     }
-    this.cycleT0 = performance.now();
-    let arrivedAt = performance.now();
+    if (this.readbackBusy) {
+      // Picked up as soon as the in-flight readback completes.
+      this.renderPending = true;
+      return;
+    }
+    this.renderPending = false;
+    const t0 = performance.now();
+    let arrivedAt = t0;
+    let alpha = false;
     if (live && cur) {
       this.drawSource(cur.frame);
       this.hasDrawnSource = true;
       arrivedAt = cur.at;
       this.rawPreview(cur.frame);
-    } else if (!freeze) {
+    } else if (!hold) {
       this.drawLoss();
+      alpha = this.cfg.lossMode === 'transparent';
     }
-    void this.readbackAndSend(arrivedAt, f.fpsN, f.fpsD, key);
+    this.renderedKey = key;
+    this.drawMs = performance.now() - t0;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    // Preview + recording consume the composed canvas directly (no CPU readback).
+    void this.thumb.maybe(this.canvas, W, H, this.env.previewFps()).then((j) => {
+      if (!j) return;
+      this.env.onPreview(this.cfg.id, j);
+      this.previewKey = key;
+    });
+    if (this.recorder) {
+      try {
+        const vf = new VideoFrame(this.canvas, { timestamp: Math.round(performance.now() * 1000) });
+        this.recorder.video(vf, W, H);
+        vf.close();
+      } catch {
+        /* recorder drops this frame */
+      }
+    }
+    this.startReadback(arrivedAt, key, alpha, false);
   }
+  private drawMs = 0;
 
   private drawSource(frame: VideoFrame): void {
     const ctx = this.ctx!;
@@ -673,59 +717,101 @@ export class OutputPipeline {
     ctx.textAlign = 'start';
   }
 
-  private async readbackAndSend(arrivedAt: number, fpsN: number, fpsD: number, key = ''): Promise<void> {
+  /** Convert + read back the canvas (GPU UYVY/BGRA, async), then submit it to NDI. */
+  private startReadback(arrivedAt: number, key: string, alpha: boolean, cacheIt: boolean): void {
+    if (!this.sender || !this.canvas) return;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    if (!this.gpu && !this.gpuFailed) {
+      this.gpu = GpuReadback.create();
+      if (!this.gpu) {
+        this.gpuFailed = true;
+        this.env.log(`[${this.cfg.name}] WebGL2 readback unavailable; using VideoFrame.copyTo BGRA`);
+      }
+    }
+    const fmt: PackFormat = alpha ? 'BGRA' : 'UYVY';
+    if (this.gpu && !this.gpu.lost && this.gpu.start(this.canvas, W, H, fmt)) {
+      this.readbackBusy = true;
+      const poll = (): void => {
+        this.pollTimer = 0;
+        const gpu = this.gpu;
+        if (!gpu) return void (this.readbackBusy = false);
+        let r;
+        try {
+          r = gpu.poll();
+        } catch (e) {
+          this.env.log(`[${this.cfg.name}] readback error: ${(e as Error).message}`);
+          this.readbackBusy = false;
+          return;
+        }
+        if (!r) {
+          if (gpu.pending) this.pollTimer = window.setTimeout(poll, 1);
+          else this.readbackBusy = false;
+          return;
+        }
+        this.deliver(r.buf, r.width, r.height, r.fmt, r.stride, arrivedAt, key, cacheIt, this.drawMs + r.cpuMs);
+      };
+      this.pollTimer = window.setTimeout(poll, 1);
+      return;
+    }
+    if (this.gpu?.lost) {
+      this.gpu = null;
+      this.env.log(`[${this.cfg.name}] WebGL readback context lost; recreating`);
+    }
+    void this.readbackLegacy(arrivedAt, key, cacheIt);
+  }
+
+  private deliver(buf: ArrayBuffer, W: number, H: number, fmt: string, stride: number, arrivedAt: number, key: string, cacheIt: boolean, cpuMs: number): void {
+    const f = this.outFormat;
+    try {
+      this.sender?.sendVideo(buf, W, H, fmt, stride, cacheIt ? LOSS_FPS : f.fpsN, cacheIt ? 1 : f.fpsD);
+      this.noteCycle(cpuMs);
+      this.noteOut(W, H, arrivedAt);
+      if (cacheIt) this.cache = { buf: buf.slice(0), key, w: W, h: H, fmt, stride };
+    } catch (e) {
+      this.env.log(`[${this.cfg.name}] send error: ${(e as Error).message}`);
+    } finally {
+      this.readbackBusy = false;
+    }
+    // A newer frame arrived while this one was being read back.
+    if (this.renderPending && this.canvasMode) this.canvasTick();
+  }
+
+  /** Fallback without WebGL2: synchronous-ish VideoFrame.copyTo BGRA. */
+  private async readbackLegacy(arrivedAt: number, key: string, cacheIt: boolean): Promise<void> {
     if (!this.sender || !this.canvas || this.readbackBusy) return;
     this.readbackBusy = true;
-    const ct0 = this.cycleT0 && performance.now() - this.cycleT0 < 1000 ? this.cycleT0 : performance.now();
-    this.cycleT0 = 0;
+    const t0 = performance.now();
     let vf: VideoFrame | null = null;
     try {
       const W = this.canvas.width;
       const H = this.canvas.height;
       vf = new VideoFrame(this.canvas, { timestamp: Math.round(performance.now() * 1000), alpha: 'keep' });
-      // Alternate between two buffers: one is the cache being re-sent, the other is filled.
       let buf = this.bufPool.pop() ?? null;
       if (!buf || buf.byteLength !== W * H * 4) buf = new ArrayBuffer(W * H * 4);
       await vf.copyTo(buf, { format: 'BGRA', layout: [{ offset: 0, stride: W * 4 }] } as unknown as VideoFrameCopyToOptions);
-      this.sender?.sendVideo(buf, W, H, 'BGRA', W * 4, fpsN, fpsD);
-      this.noteCycle(performance.now() - ct0);
-      if (this.cache && this.cache.buf.byteLength === W * H * 4 && this.bufPool.length < 2) this.bufPool.push(this.cache.buf);
-      this.cache = { buf, key, w: W, h: H };
-      this.noteOut(W, H, arrivedAt);
-      this.recorder?.video(vf, W, H);
-      const shownKey = key;
-      void this.thumb.maybe(vf, W, H, this.env.previewFps()).then((j) => {
-        if (!j) return;
-        this.env.onPreview(this.cfg.id, j);
-        this.previewKey = shownKey;
-      });
+      vf.close();
+      vf = null;
+      this.deliver(buf, W, H, 'BGRA', W * 4, arrivedAt, key, cacheIt, this.drawMs + performance.now() - t0);
+      if (this.bufPool.length < 2) this.bufPool.push(buf);
     } catch (e) {
       this.env.log(`[${this.cfg.name}] render error: ${(e as Error).message}`);
+      this.readbackBusy = false;
     } finally {
       vf?.close();
-      this.readbackBusy = false;
     }
   }
 
   /** Static content (loss/freeze) may have missed the preview throttle: thumbnail it once. */
   private refreshPreview(): void {
-    if (!this.cache || !this.canvas || this.previewKey === this.cache.key) return;
-    const key = this.cache.key;
-    let vf: VideoFrame;
-    try {
-      vf = new VideoFrame(this.canvas, { timestamp: 0 });
-    } catch {
-      return;
-    }
-    void this.thumb
-      .maybe(vf, this.canvas.width, this.canvas.height, this.env.previewFps())
-      .then((j) => {
-        if (j) {
-          this.env.onPreview(this.cfg.id, j);
-          this.previewKey = key;
-        }
-      })
-      .finally(() => vf.close());
+    const key = this.renderedKey;
+    if (!key || !this.canvas || this.previewKey === key || this.readbackBusy) return;
+    void this.thumb.maybe(this.canvas, this.canvas.width, this.canvas.height, this.env.previewFps()).then((j) => {
+      if (j) {
+        this.env.onPreview(this.cfg.id, j);
+        this.previewKey = key;
+      }
+    });
   }
 
   private noteCycle(ms: number): void {
@@ -782,6 +868,20 @@ export class OutputPipeline {
     const now = performance.now();
     while (this.outTimes.length && now - this.outTimes[0] > 1000) this.outTimes.shift();
     const st = this.sender?.stats();
+    // Clocked outputs: report what NDI actually emits (incl. repeated frames).
+    if (st && st.clocked) {
+      const ns = this.nativeSent;
+      if (ns.n >= 0 && now - ns.t >= 500) {
+        ns.fps = ((st.sent - ns.n) * 1000) / (now - ns.t);
+        ns.n = st.sent;
+        ns.t = now;
+      } else if (ns.n < 0 || st.sent < ns.n) {
+        ns.n = st.sent;
+        ns.t = now;
+      }
+    } else {
+      this.nativeSent = { n: -1, t: 0, fps: 0 };
+    }
     const live = this.sourceLive() || (this.inLossDelay() && (this.hasDrawnSource || !!this.lastPass));
     const status = !this.active ? 'off' : this.engine === 'standby' ? 'standby' : live ? 'live' : 'loss';
     return {
@@ -796,7 +896,7 @@ export class OutputPipeline {
       inFps: live ? (this.source?.fps() ?? 0) : 0,
       outWidth: this.outW,
       outHeight: this.outH,
-      outFps: this.outTimes.length,
+      outFps: st?.clocked ? Math.round(this.nativeSent.fps * 100) / 100 : this.outTimes.length,
       connections: st?.connections ?? 0,
       program: st?.program ?? false,
       preview: st?.preview ?? false,
@@ -809,7 +909,10 @@ export class OutputPipeline {
   }
 
   dispose(): void {
-    window.clearTimeout(this.timer);
+    window.clearInterval(this.timer);
+    window.clearTimeout(this.pollTimer);
+    this.gpu?.dispose();
+    this.gpu = null;
     window.clearInterval(this.lossTimer);
     this.unsubscribe?.();
     void this.recorder?.stop();
