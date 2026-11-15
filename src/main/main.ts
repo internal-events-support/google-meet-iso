@@ -31,6 +31,7 @@ import { ApiServer } from './api';
 import { applyNdiConfig } from './ndiconfig';
 import { OscServer, type OscArg, type OscMessage } from './osc';
 import { OscRouter, setActiveRouter } from './osc/router'; // [osc-agent]
+// Keep one data folder (settings, Google sign-in) regardless of productName: packaged builds// would otherwise use %APPDATA%/GMeet ISO while dev runs used %APPDATA%/gmeet-iso.app.setPath('userData', path.join(app.getPath('appData'), 'gmeet-iso'));
 
 // Keep the hidden Meet client rendering/decoding at full rate.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');

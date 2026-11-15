@@ -84,13 +84,12 @@ function oscSettings(): HTMLElement {
       'Upload OSC allow list',
       [
         fileInput,
-        sbtn('Reload', () => allowListFile && void loadFile(allowListFile), { disabled: !allowListFile, title: allowListFile ? `Reload ${allowListFile.name}` : 'Browse for a file first' }),
+        allowListFile ? sbtn('Reload', () => allowListFile && void loadFile(allowListFile), { title: `Reload ${allowListFile.name}` }) : null,
         sbtn('New', async () => {
           const v = await promptSheet('Allowed IP addresses (comma separated)', o.allowList.join(', '), 'Save');
           if (v !== null) void patchGroup('osc', { allowList: parseIps(v), allowListPath: '' });
         }),
         sbtn('Browse', () => fileInput.click()),
-        sbtn('Show in Explorer', () => {}, { disabled: true, title: 'The allow list is stored in GMeet ISO settings' }),
       ],
       { title: 'Configure a .txt file containing the IP addresses to use for the Allow List, one per-line.' },
     ),
@@ -106,7 +105,6 @@ function oscSettings(): HTMLElement {
 
 // ---------------------------------------------------------------- Command Browser
 // Support per catalogue row comes from the shared table that src/main/osc/router.ts implements.
-const NO_HANDLER = 'This command has no active handler in this build, so the switch has no effect.';
 const supportOf = (msg: string, type: string) =>
   OSC_SUPPORT.find((e) => e.address === msg && e.type === type) ?? OSC_SUPPORT.find((e) => e.address.toLowerCase() === msg.toLowerCase());
 
@@ -145,17 +143,15 @@ const CMDS: Cmd[] = OSC_CATALOG.map((r, idx) => {
     pro: pro === 'Pro',
     category: (category || 'Other').replace(/ZoomISO/g, 'GMeet ISO').replace(/ZoomOSC/g, 'GMeet ISO'),
   };
-});
+}).filter((c) => c.supported); // Only commands GMeet ISO actually handles are listed.
 
 const meetify = (s: string) => s.replace(/ZoomOSC\/ISO/g, 'GMeet ISO').replace(/ZoomOSC|ZoomISO/g, 'GMeet ISO').replace(/\bZoom\b/g, 'Google Meet');
 
-type SimTarget = 'userName' | 'galIndex' | 'targetID' | 'me' | 'all';
+type SimTarget = 'userName' | 'galIndex' | 'targetID';
 const SIM_OPTS: OptionItem<SimTarget>[] = [
   { value: 'userName', label: 'User name' },
   { value: 'galIndex', label: 'Gallery index' },
   { value: 'targetID', label: 'Participant ID' },
-  { value: 'me', label: 'Me', disabled: true, title: 'Not supported by GMeet ISO yet' },
-  { value: 'all', label: 'All', disabled: true, title: 'Not supported by GMeet ISO yet' },
 ];
 let sim: SimTarget = 'userName';
 let simName = '';
@@ -179,10 +175,6 @@ function simArg(): { seg: string; arg: string } {
       return { seg: 'galIndex', arg: '1' };
     case 'targetID':
       return { seg: 'targetID', arg: '"' + (store.state?.participants.find((p) => p.displayName === name)?.key ?? 'participant-key') + '"' };
-    case 'me':
-      return { seg: 'me', arg: '' };
-    case 'all':
-      return { seg: 'all', arg: '' };
     default:
       return { seg: 'userName', arg: `"${name}"` };
   }
@@ -222,36 +214,37 @@ function commandBrowser(): { el: HTMLElement; dispose(): void } {
   const card = (c: Cmd): HTMLElement => {
     const a = addressEl(c);
     const enabled = isEnabled(c);
-    const sw = tog(c.supported && enabled, async (v) => {
+    const sw = tog(enabled, async (v) => {
       for (const address of cmdAddresses(c)) await run({ cmd: 'setOscCommandEnabled', address, enabled: v });
-    }, !c.supported);
-    sw.title = !c.supported ? NO_HANDLER : 'Enable or disable the app listening for / sending this OSC command';
+    });
+    sw.title = 'Enable or disable the app listening for / sending this OSC command';
     const copy = h('button.cb-copy', { type: 'button', title: 'Copy the complete OSC message' }, icon('copy'));
     copy.addEventListener('click', () => {
       void navigator.clipboard.writeText(a.text);
       copy.classList.add('done');
       setTimeout(() => copy.classList.remove('done'), 900);
     });
-    const link = (label: string, names: string) =>
-      h(
+    // Related commands: only those GMeet ISO supports (and so are listed) become links.
+    const link = (label: string, names: string) => {
+      const targets = names.split(/[,;\s]+/).filter(Boolean).map((n) => CMDS.find((x) => x.msg === n && x.idx !== c.idx)).filter((t): t is Cmd => !!t);
+      if (!targets.length) return null;
+      return h(
         'div.cb-related',
         h('span.cb-cap', label),
-        ...names.split(/[,;\s]+/).filter(Boolean).map((n) => {
-          const target = CMDS.find((x) => x.msg === n && x.idx !== c.idx);
-          const b = h('button.cb-link', { type: 'button' }, `/gmeet/${n}`) as HTMLButtonElement;
-          if (target) b.addEventListener('click', () => anchors.get('cmd-' + target.idx)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
-          else b.disabled = true;
+        ...targets.map((target) => {
+          const b = h('button.cb-link', { type: 'button' }, `/gmeet/${target.msg}`) as HTMLButtonElement;
+          b.addEventListener('click', () => anchors.get('cmd-' + target.idx)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
           return b;
         }),
       );
+    };
     const badges = h(
       'div.cb-badges',
-      c.supported ? null : h('span.cb-badge.na', { title: c.note || NO_HANDLER }, 'Not supported in GMeet ISO'),
-      c.supported && c.note ? h('span.cb-badge.note', meetify(c.note)) : null,
+      c.note ? h('span.cb-badge.note', meetify(c.note)) : null,
       c.requireHost && c.requireHost !== 'None' ? h('span.cb-badge', `Host: ${c.requireHost.replace(/^Host /, '')}`) : null,
     );
     const el = h(
-      'div.cb-card' + (c.supported ? '' : '.na'),
+      'div.cb-card',
       h('div.cb-card-l', h('h4', meetify(c.title || c.msg)), c.description ? h('p', meetify(c.description)) : null, badges),
       h(
         'div.cb-card-m',
@@ -277,7 +270,6 @@ function commandBrowser(): { el: HTMLElement; dispose(): void } {
       if (!cmds.length) continue;
       total += cmds.length;
       const cats = [...new Set(cmds.map((c) => c.category))].sort((a, b) => a.localeCompare(b));
-      const supported = cmds.filter((c) => c.supported).length;
       // Outline
       const gHead = h('button.cb-o-group' + (collapsed.has(g) ? '.collapsed' : ''), { type: 'button' }, icon('chevronDown'), icon(g === 'Outputs' ? 'externalLink' : g === 'User Commands' ? 'person' : 'osc'), g);
       gHead.addEventListener('click', () => {
@@ -287,7 +279,7 @@ function commandBrowser(): { el: HTMLElement; dispose(): void } {
       });
       outline.append(gHead);
       // List section header (FloatingMacroHeader)
-      const sec = h('div.cb-group', h('div.cb-macro', h('h3', g), h('span', GROUP_INFO[g]), h('span.cb-count', `${supported} of ${cmds.length} supported`)));
+      const sec = h('div.cb-group', h('div.cb-macro', h('h3', g), h('span', GROUP_INFO[g]), h('span.cb-count', `${cmds.length} command${cmds.length === 1 ? '' : 's'}`)));
       for (const cat of cats) {
         const id = `cat-${g}-${cat}`;
         if (!collapsed.has(g)) {
@@ -340,4 +332,4 @@ function commandBrowser(): { el: HTMLElement; dispose(): void } {
 }
 
 // Exposed for self-checks.
-export const commandStats = () => ({ total: CMDS.length, supported: CMDS.filter((c) => c.supported).length });
+export const commandStats = () => ({ total: CMDS.length, catalog: OSC_CATALOG.length });

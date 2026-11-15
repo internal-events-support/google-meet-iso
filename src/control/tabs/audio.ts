@@ -1,12 +1,11 @@
-// Audio tab (RE AudioTab): Inputs / Outputs sub-views, CombinedAudioDeviceSheet,
-// AudioOutputsView (EmbeddedAudioOutputsTable + AudioOutputsTable per device) and AudioInputsView.
+// Audio tab (RE AudioTab): output device sheet (CombinedAudioDeviceSheet) and
+// AudioOutputsView (EmbeddedAudioOutputsTable + AudioOutputsTable per device).
 // Routing runs in the Meet page (src/meet/audioRouting.ts); this file edits Settings only.
 import { button, checkbox, h, icon, iconButton, popup, promptSheet, type OptList } from '../kit';
 import { on, outputState, participants, setSettings, store, updateOutput } from '../store';
 import {
   DEFAULT_ADVANCED_AUDIO,
   EMBEDDED_AUDIO_OPTIONS,
-  NOT_IN_MEET,
   type AudioChannelMode,
   type AudioOutputChannelConfig,
   type AudioOutputDeviceConfig,
@@ -15,10 +14,8 @@ import {
   type OutputConfig,
 } from '../../shared/types';
 
-type View = 'inputs' | 'outputs';
-
 /** Mode labels as shown in the ZoomISO v3 Outputs table (page14). */
-const MODE_OPTIONS: { value: AudioChannelMode; label: string; disabled?: boolean }[] = [
+const MODE_OPTIONS: { value: AudioChannelMode; label: string }[] = [
   { value: 'none', label: 'None' },
   { value: 'participant', label: 'Participant' },
   { value: 'output', label: 'Output' },
@@ -27,7 +24,6 @@ const MODE_OPTIONS: { value: AudioChannelMode; label: string; disabled?: boolean
   { value: 'mixUnassigned', label: 'Mix of all unassigned participants' },
   { value: 'screenshare', label: 'Active Share' },
   { value: 'activeSpeaker', label: 'Unique Speaker' },
-  { value: 'interpretation', label: 'Interpretation', disabled: true },
 ];
 const PAN_OPTIONS: { value: AudioPan; label: string }[] = [
   { value: 'both', label: 'Mono' },
@@ -45,19 +41,14 @@ const SORT_OPTIONS: { value: DeviceSortOrder; label: string }[] = [
   { value: 'manual', label: 'Manual' },
 ];
 const MAX_DELAY_MS = 1000;
-const INPUT_NA = `${NOT_IN_MEET}: the Meet web client has a single microphone, so talkback, meeting-mic routing and ducking can't be routed.`;
 
-let view: View = 'outputs';
 const collapsedEmbedded = new Set<string>();
-const inputCollapsed = new Set<string>();
-let inputCategoryCollapsed = false;
 const channelCountCache = new Map<string, number>();
 /** Live meter elements, refreshed on every state update without re-rendering. */
 let meters: { el: HTMLElement; get(): number }[] = [];
 
 // Settings from an older main process may lack the Audio-tab fields.
 const outDevs = (): string[] => store.settings.audioOutputDevices ?? [];
-const inDevs = (): string[] => store.settings.audioInputDevices ?? [];
 
 export function mountAudio(host: HTMLElement): void {
   host.classList.add('audio-tab');
@@ -80,7 +71,7 @@ export function mountAudio(host: HTMLElement): void {
     const st = body.scrollTop;
     meters = [];
     try {
-      body.replaceChildren(view === 'outputs' ? outputsView(render) : inputsView(render));
+      body.replaceChildren(outputsView(render));
     } catch (e) {
       console.error('[audio]', e);
       body.replaceChildren(h('pre.au-empty', String((e as Error).stack ?? e)));
@@ -98,7 +89,7 @@ export function mountAudio(host: HTMLElement): void {
     if (sig !== lastSig) {
       lastSig = sig;
       growChannelsFromState();
-      if (view === 'outputs') render();
+      render();
     }
     tickMeters();
   });
@@ -121,32 +112,17 @@ function meter(get: () => number): HTMLElement {
 // toolbar
 // ---------------------------------------------------------------------------
 function renderToolbar(el: HTMLElement, render: () => void): void {
-  const seg = h(
-    'div.au-views',
-    ...(['inputs', 'outputs'] as View[]).map((v) => {
-      const b = h('button', { class: view === v ? 'active' : '' }, icon(v === 'inputs' ? 'mic' : 'speaker'), v === 'inputs' ? 'Inputs' : 'Outputs');
-      b.addEventListener('click', () => {
-        view = v;
-        render();
-      });
-      return b;
-    }),
-  );
-  const add = button(h('span.bl', icon('plus'), view === 'outputs' ? 'Update Output Devices' : 'Update Input Devices'), () => openDeviceSheet(view));
+  const add = button(h('span.bl', icon('plus'), 'Update Output Devices'), openDeviceSheet);
   const collapse = button(h('span.bl', icon('chevronDown', 'flip'), 'Collapse All'), () => void setAllCollapsed(true, render));
   const expand = button(h('span.bl', icon('chevronDown'), 'Expand All'), () => void setAllCollapsed(false, render));
-  el.replaceChildren(h('div.l', add), h('div.c', seg), h('div.r', collapse, expand));
+  el.replaceChildren(h('div.l', add), h('div.r', collapse, expand));
 }
 
 async function setAllCollapsed(c: boolean, render: () => void): Promise<void> {
   for (const o of store.settings.outputs) c ? collapsedEmbedded.add(o.id) : collapsedEmbedded.delete(o.id);
-  inputCollapsed.clear();
-  if (c) for (const d of inDevs()) inputCollapsed.add(d);
-  if (view === 'outputs') {
-    const cfg = { ...(store.settings.audioOutputConfig ?? {}) };
-    for (const d of outDevs()) if (cfg[d]) cfg[d] = { ...cfg[d], collapsed: c };
-    await setSettings({ audioOutputConfig: cfg });
-  }
+  const cfg = { ...(store.settings.audioOutputConfig ?? {}) };
+  for (const d of outDevs()) if (cfg[d]) cfg[d] = { ...cfg[d], collapsed: c };
+  await setSettings({ audioOutputConfig: cfg });
   render();
 }
 
@@ -175,7 +151,8 @@ async function probeChannels(label: string): Promise<number> {
 
 function defaultChannel(i: number): AudioOutputChannelConfig {
   const a = { ...DEFAULT_ADVANCED_AUDIO, ...(store.settings.advancedAudio ?? {}) };
-  const mode = a.defaultChannelMode === 'interpretation' ? 'none' : a.defaultChannelMode;
+  // Older settings may still carry the removed 'interpretation' mode.
+  const mode: AudioChannelMode = MODE_OPTIONS.some((m) => m.value === a.defaultChannelMode) ? a.defaultChannelMode : 'none';
   return {
     name: '',
     mode,
@@ -305,7 +282,6 @@ function selectionCell(label: string, idx: number, c: AudioOutputChannelConfig):
     const opts: OptList = [{ value: '', label: 'Select Output' }, ...store.settings.outputs.map((o) => ({ value: o.id, label: o.name }))];
     return popup(opts, c.selection, (v) => void patchChannel(label, idx, { selection: v }), { cls: 'sm au-sel short' }).el;
   }
-  if (c.mode === 'interpretation') return popup([], '', () => {}, { cls: 'sm au-sel tiny', disabled: true, title: NOT_IN_MEET }).el;
   return h('div');
 }
 
@@ -326,7 +302,6 @@ function deviceTable(label: string): HTMLElement {
   dev.channels.forEach((c, i) => {
     if (c.visible === false) return;
     const mode = popup(MODE_OPTIONS, c.mode, (v) => void patchChannel(label, i, { mode: v as AudioChannelMode, selection: '' }), { cls: 'sm au-mode' });
-    for (const o of Array.from(mode.select.options)) if (o.disabled) o.title = NOT_IN_MEET;
     const pan = popup(PAN_OPTIONS, c.pan, (v) => void patchChannel(label, i, { pan: v as AudioPan }), { cls: 'sm au-pan' });
     const gain = popup(gainOptions(c.gainDb), String(c.gainDb), (v) => void patchChannel(label, i, { gainDb: Number(v) }), { cls: 'sm au-gain' });
     const name = h('div.au-name', { title: 'Edit channel name (double-click)' }, c.name || `Channel ${i + 1}`);
@@ -390,84 +365,11 @@ function outputsView(render: () => void): HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
-// Inputs view (AudioInputsView) — same layout, disabled
-// ---------------------------------------------------------------------------
-function inputsView(render: () => void): HTMLElement {
-  const outs = store.settings.outputs;
-  const cols = `110px 70px repeat(${outs.length}, 30px) 24px minmax(120px, 160px) 1fr`;
-  const grid = (cls: string, ...kids: (Node | string)[]) => h(`div.ai-row${cls}`, { style: `grid-template-columns:${cols}` }, ...kids);
-  const wrap = h('div.au-view.ai');
-  wrap.append(
-    h('div.ai-banner', { title: INPUT_NA }, icon('info'), h('span', h('b', NOT_IN_MEET), ' — Meeting Mic routing, Talkback outputs and ducking need the Zoom SDK. Your input devices are listed for reference.')),
-  );
-  wrap.append(
-    grid('.ai-groups', h('div'), h('div.g', 'MEETING MIC'), h('div.g', { style: `grid-column: span ${Math.max(1, outs.length)}` }, 'TALKBACK OUTPUTS'), h('div'), h('div'), h('div')),
-  );
-  wrap.append(
-    grid(
-      '.ai-heads',
-      h('div.lbl', 'Device Channel'),
-      h('div.rot', h('span', 'Meeting Mic')),
-      ...outs.map((o) => h('div.rot', h('span', o.name))),
-      h('div'),
-      h('div.lbl', 'Meters'),
-      h('div'),
-    ),
-  );
-  const disabledBtn = (name: string, title: string) => h('button.ai-ib', { disabled: true, title: `${title}: ${NOT_IN_MEET}` }, icon(name));
-  wrap.append(grid('.ai-ctl', h('div', 'Latch on:'), h('div'), ...outs.map(() => h('div.cell', disabledBtn('headset', 'Latch on'))), h('div'), h('div'), h('div')));
-  wrap.append(grid('.ai-ctl', h('div', 'Ducking:'), h('div'), ...outs.map(() => h('div.cell', disabledBtn('waveform', 'Ducking'))), h('div'), h('div'), h('div')));
-
-  const tri = h('button.au-tri.small', inputCategoryCollapsed ? '›' : '⌄');
-  tri.addEventListener('click', () => {
-    inputCategoryCollapsed = !inputCategoryCollapsed;
-    render();
-  });
-  wrap.append(h('div.ai-cat', tri, 'Windows Audio Devices'));
-  if (inputCategoryCollapsed) return wrap;
-
-  const devs = inDevs();
-  if (!devs.length) wrap.append(h('div.au-empty', 'No audio devices configured'));
-  for (const d of devs) {
-    const collapsed = inputCollapsed.has(d);
-    const missing = !store.devices.audioInputs.includes(d);
-    const x = iconButton('x', () => void setSettings({ audioInputDevices: inDevs().filter((v) => v !== d) }), 'Remove', 'au-ib');
-    const eye = h('button.icon-btn.au-ib', { disabled: true, title: NOT_IN_MEET }, icon('eye'));
-    const t = h(
-      'div.au-table',
-      sectionHeader(
-        d,
-        missing ? 'Device disconnected' : '[0 Routed Channels]',
-        collapsed,
-        () => {
-          collapsed ? inputCollapsed.delete(d) : inputCollapsed.add(d);
-          render();
-        },
-        [eye, x],
-      ),
-    );
-    if (!collapsed)
-      for (let i = 0; i < 2; i++) {
-        const box = () => {
-          const c = checkbox(false, () => {}).el;
-          (c.firstElementChild as HTMLInputElement).disabled = true;
-          c.title = NOT_IN_MEET;
-          return h('div.cell', c);
-        };
-        t.append(grid('.ai-ch', h('div', `Channel ${i + 1}`), box(), ...outs.map(box), h('div'), h('div', h('div.au-meter', h('i'))), h('div')));
-      }
-    wrap.append(t);
-  }
-  return wrap;
-}
-
-// ---------------------------------------------------------------------------
 // CombinedAudioDeviceSheet
 // ---------------------------------------------------------------------------
-function openDeviceSheet(kind: View): void {
-  const isOut = kind === 'outputs';
-  const available = isOut ? store.devices.audioOutputs : store.devices.audioInputs;
-  const enrolled = isOut ? outDevs() : inDevs();
+function openDeviceSheet(): void {
+  const available = store.devices.audioOutputs;
+  const enrolled = outDevs();
   let sort: DeviceSortOrder = store.settings.audioDeviceSortOrder ?? 'manual';
   const checked = new Set(enrolled);
   // Manual order: enrolled first (in table order), then the rest as Windows lists them.
@@ -488,7 +390,7 @@ function openDeviceSheet(kind: View): void {
           h('span.grip', { title: sort === 'manual' ? 'Drag to reorder' : 'Set Sort by: Manual to reorder' }, '≡'),
           cb,
           h('span.nm', d, available.includes(d) ? null : h('span.sub', ' (disconnected)')),
-          h('span.cnt', { dataset: { dev: d } }, counts.get(d) ?? (isOut ? '' : '2 input channels')),
+          h('span.cnt', { dataset: { dev: d } }, counts.get(d) ?? ''),
         );
         row.addEventListener('dragstart', () => (drag = d));
         row.addEventListener('dragover', (e) => {
@@ -504,8 +406,7 @@ function openDeviceSheet(kind: View): void {
     );
   };
   draw();
-  if (isOut)
-    for (const d of order)
+  for (const d of order)
       void probeChannels(d).then((n) => {
         counts.set(d, `${n} output channel${n === 1 ? '' : 's'}`);
         for (const el of Array.from(list.querySelectorAll<HTMLElement>('.cnt'))) if (el.dataset.dev === d) el.textContent = counts.get(d)!;
@@ -525,18 +426,15 @@ function openDeviceSheet(kind: View): void {
     layer.remove();
     if (!ok) return;
     const next = sorted().filter((d) => checked.has(d));
-    if (isOut) {
-      const cfg = { ...(store.settings.audioOutputConfig ?? {}) };
-      for (const d of next) if (!cfg[d]) cfg[d] = deviceConfig(d, await probeChannels(d));
-      await setSettings({ audioOutputDevices: next, audioOutputConfig: cfg, audioDeviceSortOrder: sort });
-    } else await setSettings({ audioInputDevices: next, audioDeviceSortOrder: sort });
+    const cfg = { ...(store.settings.audioOutputConfig ?? {}) };
+    for (const d of next) if (!cfg[d]) cfg[d] = deviceConfig(d, await probeChannels(d));
+    await setSettings({ audioOutputDevices: next, audioOutputConfig: cfg, audioDeviceSortOrder: sort });
   };
   const sheet = h(
     'div.sheet.ds-sheet',
-    h('div.ds-title', h('h3', isOut ? 'Select Output Audio Devices' : 'Select Input Audio Devices'), h('span.lbl', 'Sort by:'), sortPop.el),
+    h('div.ds-title', h('h3', 'Select Output Audio Devices'), h('span.lbl', 'Sort by:'), sortPop.el),
     h('div.ds-cat', 'Windows Audio Devices'),
     available.length || order.length ? list : h('div.au-empty', 'No devices found'),
-    isOut ? null : h('div.ds-cat.na', { title: NOT_IN_MEET }, 'NDI Audio Sources', h('span.sub', ` — ${NOT_IN_MEET}`)),
     h('div.actions', button('Cancel', () => void done(false)), button('Update', () => void done(true), 'primary')),
   );
   const layer = h('div.sheet-layer', sheet);

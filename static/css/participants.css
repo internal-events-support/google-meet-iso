@@ -17,7 +17,6 @@
 .pm-table col.c-name { width: 210px; }
 .pm-table col.c-id { width: 100px; }
 .pm-table col.c-role { width: 170px; }
-.pm-table col.c-panelist { width: 60px; }
 .pm-table col.c-av { width: 76px; }
 .pm-table col.c-status { width: 170px; }
 .pm-table col.c-assign { width: 110px; }
@@ -29,7 +28,6 @@
 }
 .pm-table th:first-child { padding-left: 18px; }
 .pm-table th:last-child { border-right: 0; }
-.pm-table th.disabled { color: var(--text-2); }
 .pm-table th.c-out { padding: 0 0 0 4px; }
 .pm-table td { height: 53px; padding: 0 4px; border-bottom: 1px solid rgba(255,255,255,.08); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .pm-table td:first-child { padding-left: 16px; }

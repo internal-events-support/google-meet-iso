@@ -1,9 +1,8 @@
 // Meeting tab — replica of ZoomISO v3 MeetingTab (RE 01: TrialBanner · MeetingButtonGroup ·
 // MeetingPreviewAndControls · Footer) plus the signed-out Splash (AuthenticatedRoot → Splash).
-// Zoom → Meet mapping: Join sheet = Meet link / code; PMI, ZAK and Zoom Events are greyed; Google sign-in.
+// Zoom → Meet mapping: Join sheet = Meet link / code; New Meeting / Join Meeting only; Google sign-in.
 
 import type { CameraSource } from '../../shared/types';
-import { NOT_IN_MEET } from '../../shared/types';
 import { button, h, icon, popup, type OptList } from '../kit';
 import { api, bindPreview, inCall, on, refreshNdi, run, setSettings, store } from '../store';
 
@@ -12,21 +11,16 @@ let meetWindowVisible = false;
 
 // ---------------------------------------------------------------------------
 // MeetingButton (80×80 rounded tile + caption)
-function meetingButton(title: string, iconEl: HTMLElement, color: 'orange' | 'blue', onClick: () => void, disabledTitle = '') {
+function meetingButton(title: string, iconEl: HTMLElement, color: 'orange' | 'blue', onClick: () => void) {
   const tile = h('span.mt-tile', { class: color }, iconEl);
   const b = h('button.mt-button', tile, h('span.mt-title', title)) as HTMLButtonElement;
   b.addEventListener('click', onClick);
-  if (disabledTitle) {
-    b.disabled = true;
-    b.title = disabledTitle;
-    b.dataset.na = '1';
-  }
   return b;
 }
 
 // ---------------------------------------------------------------------------
-// JoinMeetingSheet (JoinMeetingSheetTabs: meetingInfo / url / zak)
-type JoinTab = 'meetingInfo' | 'url' | 'zak';
+// JoinMeetingSheet (JoinMeetingSheetTabs: meetingInfo / url)
+type JoinTab = 'meetingInfo' | 'url';
 let joinTab: JoinTab = 'meetingInfo';
 
 function openJoinSheet(): void {
@@ -42,9 +36,8 @@ function openJoinSheet(): void {
       h('label.mt-form-row', h('span', 'Meeting code'), codeInput),
       h('div.mt-form-row', h('span', 'Display name'), h('span.secondary', store.settings.botName || 'Signed-in Google account'))),
     url: h('div.mt-form', h('label.mt-form-row', h('span', 'Meeting link'), linkInput)),
-    zak: h('div.mt-form', h('div.mt-sheet-disabled', `ZAK tokens are a Zoom feature. ${NOT_IN_MEET}.`)),
   };
-  const labels: Record<JoinTab, string> = { meetingInfo: 'Meeting Info', url: 'URL', zak: 'ZAK' };
+  const labels: Record<JoinTab, string> = { meetingInfo: 'Meeting Info', url: 'URL' };
   const tabs = h('div.segmented.mt-sheet-tabs');
   const body = h('div.mt-sheet-body');
   const joinBtn = button('Join', () => void submit(), 'primary');
@@ -52,13 +45,11 @@ function openJoinSheet(): void {
     joinTab = t;
     for (const b of tabs.children) (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.value === t);
     body.replaceChildren(panes[t]);
-    joinBtn.disabled = t === 'zak';
     err.textContent = '';
     setTimeout(() => (t === 'url' ? linkInput : codeInput).focus(), 0);
   };
   for (const t of Object.keys(labels) as JoinTab[]) {
-    const b = h('button', { dataset: { value: t }, title: t === 'zak' ? NOT_IN_MEET : undefined }, labels[t]) as HTMLButtonElement;
-    if (t === 'zak') b.classList.add('na');
+    const b = h('button', { dataset: { value: t } }, labels[t]) as HTMLButtonElement;
     b.addEventListener('click', () => select(t));
     tabs.append(b);
   }
@@ -81,7 +72,7 @@ function openJoinSheet(): void {
         return;
       }
       target = /^https?:/i.test(v) ? v : `https://${v}`;
-    } else return;
+    }
     joinBtn.disabled = true;
     joinBtn.textContent = 'Joining…';
     try {
@@ -134,10 +125,8 @@ export function mountMeeting(host: HTMLElement): void {
 
   // ---- MeetingButtonGroup
   const newBtn = meetingButton('New Meeting', icon('video.fill'), 'orange', () => void api.join('https://meet.google.com/new'));
-  const pmiBtn = meetingButton('PMI', icon('profile.small.fill'), 'orange', () => {}, `Personal Meeting IDs are a Zoom feature. ${NOT_IN_MEET}`);
   const joinBtn = meetingButton('Join Meeting', icon('plusSquare'), 'blue', openJoinSheet);
-  const eventsBtn = meetingButton('Events', icon('events.fill'), 'blue', () => {}, `Zoom Events. ${NOT_IN_MEET}`);
-  const group = h('div.mt-buttons', newBtn, pmiBtn, joinBtn, eventsBtn);
+  const group = h('div.mt-buttons', newBtn, joinBtn);
 
   // ---- MeetingPreviewAndControls
   const status = h('div.mt-status');
@@ -179,7 +168,7 @@ export function mountMeeting(host: HTMLElement): void {
   });
   const speaker = popup([], '', (v) => void setSettings({ monitorDevice: v }));
 
-  // In-meeting: InMeetingAudioButton / InMeetingVideoButton / InMeetingExitMeetingButton, ChatwithGroup, TalkToGroup
+  // In-meeting: InMeetingAudioButton / InMeetingVideoButton / InMeetingExitMeetingButton, ChatwithGroup
   const audioBtn = h('button.mt-inbtn') as HTMLButtonElement;
   const videoBtn = h('button.mt-inbtn') as HTMLButtonElement;
   const leaveBtn = h('button.mt-inbtn.leave', h('span', 'Leave Meeting')) as HTMLButtonElement;
@@ -194,9 +183,7 @@ export function mountMeeting(host: HTMLElement): void {
   chatField.addEventListener('keydown', (e) => e.key === 'Enter' && void sendChat());
   const chatBtn = h('button.btn.mt-small', icon('chat.outline'), h('span', 'Chat with group (0)')) as HTMLButtonElement;
   chatBtn.addEventListener('click', () => void sendChat());
-  const talkBtn = h('button.btn.mt-small', { title: `Talkback. ${NOT_IN_MEET}` }, icon('headset.fill'), h('span', 'Talk to group (0)')) as HTMLButtonElement;
-  talkBtn.disabled = true;
-  const inMeeting = h('div.mt-inmeeting', h('div.mt-inbtns', audioBtn, videoBtn, leaveBtn), h('div.mt-chat', chatField, chatBtn, talkBtn));
+  const inMeeting = h('div.mt-inmeeting', h('div.mt-inbtns', audioBtn, videoBtn, leaveBtn), h('div.mt-chat', chatField, chatBtn));
 
   const row = (label: HTMLElement | string, ...ctl: HTMLElement[]) => h('div.mt-row', typeof label === 'string' ? h('span.mt-row-label', label) : label, ...ctl);
   const panel = h('div.mt-panel',
@@ -230,8 +217,6 @@ export function mountMeeting(host: HTMLElement): void {
     const types: OptList = [
       { value: 'device', label: 'Webcam' },
       { value: 'ndi', label: 'NDI' },
-      { value: 'blackmagic', label: 'Blackmagic Desktop Video', disabled: true },
-      { value: 'aja', label: 'AJA NTV2', disabled: true },
       { value: 'none', label: 'None' },
     ];
     inputSource.set(types, s.camera.type);
@@ -265,7 +250,6 @@ export function mountMeeting(host: HTMLElement): void {
     videoBtn.replaceChildren(icon(st?.camOn === false ? 'camera.slash.outline' : 'camera.outline'), h('span', st?.camOn === false ? 'Start Video' : 'Stop Video'));
     const n = (st?.participants ?? []).filter((p) => p.kind === 'camera' && !p.isSelf).length;
     (chatBtn.lastChild as HTMLElement).textContent = `Chat with group (${n})`;
-    (talkBtn.lastChild as HTMLElement).textContent = `Talk to group (${n})`;
   }
   on('settings', render);
   on('state', render);

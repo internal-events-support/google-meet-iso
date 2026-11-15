@@ -4,14 +4,13 @@
 //   ├ toolbar: search field + ParticipantFilterToggle × 4 (ParticipantManagementFilters:
 //   │          hostOrCohost / videoOn / audioOn / handRaised — checkbox + icon, tooltip = label)
 //   └ ParticipantManagementTable (CustomTableStyle)
-//       Name (ParticipantInfoView = ProfilePicture + name) | Meet ID | Role | Panelist (⛔) |
+//       Name (ParticipantInfoView = ProfilePicture + name) | Meet ID | Role |
 //       Video/Audio | Status (ParticipantStreamStatusCell → AssignedStreamStatus/StreamStatusView) |
 //       Output Assignment | 1 … N (OutputAssignmentToggle per ZISOStream)
 // Right-click a row for Meet actions (pin, lower hand, mute, remove), or the header for Mute All /
 // Lower All Hands. They run in the Meet page (best effort).
 
 import {
-  NOT_IN_MEET,
   PARTICIPANT_FILTER_OPTIONS,
   participantMatches,
   type OutputConfig,
@@ -130,7 +129,6 @@ export function mountParticipants(host: HTMLElement): void {
       h('col.c-name'),
       h('col.c-id'),
       h('col.c-role'),
-      h('col.c-panelist'),
       h('col.c-av'),
       h('col.c-status'),
       h('col.c-assign'),
@@ -143,7 +141,6 @@ export function mountParticipants(host: HTMLElement): void {
         h('th', 'Name'),
         h('th', 'Meet ID'),
         h('th', 'Role'),
-        h('th.disabled', { title: NOT_IN_MEET }, 'Panelist'),
         h('th', 'Video/Audio'),
         h('th', 'Status'),
         h('th', 'Output Assignment'),
@@ -289,7 +286,6 @@ export function mountParticipants(host: HTMLElement): void {
           ),
           h('td.pm-id', meetId(p)),
           h('td', role(p) + (p.isSelf ? ' (Bot)' : '')),
-          h('td'),
           avCell(p),
           statusCell(p, outs),
           h('td'),

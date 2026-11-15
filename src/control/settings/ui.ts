@@ -2,9 +2,17 @@
 // small bound controls. Every control commits straight to setSettings (the RE view models save on change).
 import { h, icon, popup, toggle, popover, type Child } from '../kit';
 import { store, setSettings } from '../store';
-import { DEFAULT_SETTINGS, NESTED_SETTINGS_KEYS, NOT_IN_MEET, type OptionItem, type Settings } from '../../shared/types';
+import {
+  AUDIO_CHANNEL_MODE_OPTIONS,
+  DEFAULT_SETTINGS,
+  NESTED_SETTINGS_KEYS,
+  OSC_SUBSCRIBE_MODE_OPTIONS,
+  RECORDING_CODEC_OPTIONS,
+  RECORDING_FORMAT_OPTIONS,
+  type OptionItem,
+  type Settings,
+} from '../../shared/types';
 
-export { NOT_IN_MEET };
 
 type Group = 'videoLoss' | 'recording' | 'autoAssign' | 'interface' | 'advancedAudio' | 'embeddedAudio' | 'osc';
 
@@ -17,6 +25,13 @@ export function normalizeSettings(): void {
   const def = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
   for (const k of Object.keys(def)) if (cur[k] === undefined) cur[k] = def[k];
   for (const k of NESTED_SETTINGS_KEYS) cur[k] = { ...(def[k] as object), ...((cur[k] as object) ?? {}) };
+  // Values from older settings.json whose option was removed fall back to the default so the pickers stay valid.
+  const s = store.settings;
+  const ok = (opts: OptionItem[], v: string) => opts.some((o) => o.value === v);
+  if (!ok(RECORDING_FORMAT_OPTIONS, s.recording.format)) s.recording.format = DEFAULT_SETTINGS.recording.format;
+  if (!ok(RECORDING_CODEC_OPTIONS, s.recording.videoCodec)) s.recording.videoCodec = DEFAULT_SETTINGS.recording.videoCodec;
+  if (!ok(OSC_SUBSCRIBE_MODE_OPTIONS, s.osc.subscribeMode)) s.osc.subscribeMode = DEFAULT_SETTINGS.osc.subscribeMode;
+  if (!ok(AUDIO_CHANNEL_MODE_OPTIONS, s.advancedAudio.defaultChannelMode)) s.advancedAudio.defaultChannelMode = DEFAULT_SETTINGS.advancedAudio.defaultChannelMode;
 }
 
 /** Patch one nested settings group (merged with its current value). */
@@ -36,11 +51,9 @@ export function info(text: string): HTMLElement {
 
 export interface RowOpts {
   info?: string;
-  disabled?: boolean;
-  /** Tooltip; defaults to NOT_IN_MEET for disabled rows. */
   title?: string;
   cls?: string;
-  /** Sub-row (indented, like "Apply ducking when"). */
+  /** Sub-row (indented). */
   sub?: boolean;
 }
 
@@ -50,17 +63,8 @@ export function row(label: Child, control: Child | Child[], o: RowOpts = {}): HT
   const el = h('div.s-row', h('div.s-label', label, o.info ? info(o.info) : null), h('div.s-ctrl', ...ctrls));
   if (o.cls) el.className += ' ' + o.cls;
   if (o.sub) el.classList.add('sub');
-  if (o.disabled) {
-    el.classList.add('na');
-    el.title = o.title ?? NOT_IN_MEET;
-    el.querySelectorAll('input,select,button:not(.s-info),textarea').forEach((c) => ((c as HTMLInputElement).disabled = true));
-  } else if (o.title) el.title = o.title;
+  if (o.title) el.title = o.title;
   return el;
-}
-
-/** Same as row() but disabled with the standard "Not available in Google Meet" tooltip. */
-export function naRow(label: Child, control: Child | Child[], o: Omit<RowOpts, 'disabled'> = {}): HTMLElement {
-  return row(label, control, { ...o, disabled: true });
 }
 
 /** SettingHeaderViewModifier: bold section title (optional icon + subtitle) above a rounded group. */
@@ -82,21 +86,6 @@ export function pick<T extends string>(opts: OptionItem<T>[], value: T | string,
 
 export function tog(value: boolean, onChange: (v: boolean) => void, disabled = false): HTMLElement {
   return toggle(value, onChange, { cls: 's-switch', disabled }).el;
-}
-
-/** macOS radio group ("○ vImage (Legacy)  ● Metal (Recommended)"). */
-export function radios<T extends string>(items: { value: T; label: string; disabled?: boolean }[], value: T | string, onChange: (v: T) => void, disabled = false): HTMLElement {
-  const name = 'r' + Math.random().toString(36).slice(2);
-  return h(
-    'div.s-radios',
-    ...items.map((it) => {
-      const inp = h('input', { type: 'radio', name }) as HTMLInputElement;
-      inp.checked = it.value === value;
-      inp.disabled = disabled || !!it.disabled;
-      inp.addEventListener('change', () => inp.checked && onChange(it.value));
-      return h('label.s-radio', inp, h('span', it.label));
-    }),
-  );
 }
 
 /** Right-aligned text field (OSC IP/ports, recording prefix …). Commits on change/Enter. */

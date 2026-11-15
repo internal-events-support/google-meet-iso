@@ -4,7 +4,7 @@ import { initStore, on, windowArg, store } from '../store';
 import { h, icon } from '../kit';
 import type { SettingsTab } from '../../shared/types';
 import { generalPane, inMeetingPane, outputEffectsPane, videoLossPane, setRerender } from '../settings/panes';
-import { talkbackPane, ndiPane, recordingPane, logsPane } from '../settings/panes2';
+import { ndiPane, recordingPane, logsPane } from '../settings/panes2';
 import { normalizeSettings } from '../settings/ui';
 import { oscPane, setOscSubTab, commandStats, type OscSubTab } from '../settings/osc';
 
@@ -14,8 +14,7 @@ const TABS: { id: SettingsTab; label: string; icon: string }[] = [
   { id: 'inMeeting', label: 'In-meeting', icon: 'videoCam' },
   { id: 'outputEffects', label: 'Output Effects', icon: 'sliders' },
   { id: 'videoLoss', label: 'Video Loss', icon: 'videoLoss' },
-  { id: 'audioInputsAndTalkback', label: 'Audio Inputs and Talkback', icon: 'headset' },
-  { id: 'ndiAndSrt', label: 'NDI and SRT', icon: 'ndi' },
+  { id: 'ndiAndSrt', label: 'NDI', icon: 'ndi' },
   { id: 'osc', label: 'OSC', icon: 'oscGlyph' },
   { id: 'recording', label: 'Recording', icon: 'record' },
   { id: 'logs', label: 'Logs', icon: 'doc' },
@@ -23,7 +22,7 @@ const TABS: { id: SettingsTab; label: string; icon: string }[] = [
 
 const ALIASES: Record<string, SettingsTab> = {
   general: 'general', inmeeting: 'inMeeting', 'in-meeting': 'inMeeting', outputeffects: 'outputEffects', effects: 'outputEffects',
-  videoloss: 'videoLoss', loss: 'videoLoss', audioinputsandtalkback: 'audioInputsAndTalkback', talkback: 'audioInputsAndTalkback', audio: 'audioInputsAndTalkback',
+  videoloss: 'videoLoss', loss: 'videoLoss', audioinputsandtalkback: 'general', talkback: 'general', audio: 'general',
   ndiandsrt: 'ndiAndSrt', ndi: 'ndiAndSrt', srt: 'ndiAndSrt', osc: 'osc', recording: 'recording', logs: 'logs', log: 'logs',
 };
 
@@ -63,7 +62,6 @@ function renderContent(): void {
     case 'inMeeting': el = inMeetingPane(); break;
     case 'outputEffects': el = outputEffectsPane(); break;
     case 'videoLoss': el = videoLossPane(); break;
-    case 'audioInputsAndTalkback': el = talkbackPane(); break;
     case 'ndiAndSrt': el = ndiPane(); break;
     case 'recording': el = recordingPane(); break;
     case 'osc': {

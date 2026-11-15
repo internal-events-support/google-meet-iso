@@ -1,4 +1,4 @@
-// Settings categories: Audio Inputs and Talkback, NDI and SRT, Recording, Logs.
+// Settings categories: NDI, Recording, Logs.
 import { h, icon } from '../kit';
 import { store, setSettings, api, on } from '../store';
 import {
@@ -9,62 +9,9 @@ import {
   RECORDING_FORMAT_OPTIONS,
   type OptionItem,
 } from '../../shared/types';
-import { field, info, naRow, numField, patchGroup, pick, radios, row, sbtn, section, seg, slider, tog, colorWell, NOT_IN_MEET } from './ui';
+import { field, info, numField, patchGroup, pick, row, sbtn, section, seg, tog } from './ui';
 
-// ---------------------------------------------------------------- Audio Inputs and Talkback (not possible in Meet)
-export function talkbackPane(): HTMLElement {
-  const outs = store.settings.outputs.length ? store.settings.outputs.map((o) => o.name) : ['GMEET 1', 'GMEET 2', 'GMEET 3', 'GMEET 4'];
-  const duck = (name: string, first: boolean) =>
-    h(
-      'div.s-duck' + (first ? '' : '.dim'),
-      h('span.s-duck-name', name),
-      h('span.s-duck-cap', 'Full interrupt'),
-      slider(40, 0, 100, 1, () => {}, { disabled: true }),
-      h('span.s-duck-cap', 'No ducking'),
-      h('span.s-duck-val', '40%'),
-    );
-  const pane = h(
-    'div.s-pane.na-pane',
-    { title: NOT_IN_MEET },
-    section(
-      'Audio Inputs',
-      [
-        naRow(
-          'Audio Management Mode',
-          pick([{ value: 'meet', label: 'Google Meet Managed (default)' }, { value: 'iso', label: 'GMeet ISO Managed' }], 'meet', () => {}, true),
-          { info: 'GMeet ISO Managed mode is required for routing Audio Input channels to the meeting mic.' },
-        ),
-      ],
-      { icon: 'mic.outline', subtitle: "Select whether to have your microphone in Google Meet managed by Google Meet's audio device selectors or instead via GMeet ISO's audio input routing table." },
-    ),
-    section(
-      'Talkback',
-      [
-        naRow('Enable Talkback', tog(false, () => {}, true)),
-        naRow('Suppress meeting mic while Talkback is active', tog(false, () => {}, true), {
-          info: 'Automatically interrupt the meeting mic return feed when audio is present on at least one Talkback channel. Recommended when Talkback and Meeting audio sources are the same to avoid doubled audio.',
-        }),
-        naRow('Noise Suppression', [slider(50, 0, 100, 1, () => {}, { disabled: true, cls: 'short' }), h('span.s-duck-val', '50%'), tog(false, () => {}, true)], {
-          info: 'Runs noise removal processing on Talkback audio channels before transmitting to Google Meet.',
-        }),
-        naRow('Echo Cancellation', tog(false, () => {}, true), {
-          info: 'Removes audio coming from computer speakers from Talkback audio channels. Only use if Talkback channels may contain feedback from open speakers (e.g., producers are not wearing headphones).',
-        }),
-        naRow('Enable Ducking', tog(false, () => {}, true), {
-          info: 'When ducking is applied, participants in Talkback channels will hear other participants in the meeting at a lower volume. Set to 0% for full interrupt and 100% for no change in volume',
-        }),
-        naRow('Apply ducking when', pick([{ value: 'audio', label: 'there is audio on an open channel' }, { value: 'open', label: 'the channel is open' }], 'audio', () => {}, true), { sub: true }),
-        h('div.s-row.sub.na.s-ducks', ...outs.map((n, i) => duck(n, i === 0))),
-      ],
-      { icon: 'headset', subtitle: 'Send unique one-way audio from GMeet ISO directly to individual participants who are assigned to outputs.' },
-    ),
-  );
-  return pane;
-}
-
-// ---------------------------------------------------------------- NDI and SRT
-const NDI_ONLY = 'Not available in GMeet ISO (NDI Full Bandwidth only)';
-
+// ---------------------------------------------------------------- NDI
 export function ndiPane(): HTMLElement {
   const s = store.settings;
   const nics = store.system?.nics ?? [];
@@ -95,32 +42,8 @@ export function ndiPane(): HTMLElement {
     void setSettings({});
   });
 
-  const srtCols = ['Channel Name', 'BMD Stream Key', 'Destination IP', 'Port', 'Mode', 'Latency (ms)'];
-  const srtTable = h(
-    'div.s-srt-table',
-    h('div.s-srt-head', ...srtCols.map((c) => h('span', c)), h('span')),
-    h(
-      'div.s-srt-row',
-      h('input.s-field', { value: 'SRT Device', disabled: true }),
-      h('input.s-field', { placeholder: 'BMD Stream Key', disabled: true }),
-      h('input.s-field', { value: '0.0.0.0', disabled: true }),
-      h('input.s-field', { value: '2000', disabled: true }),
-      pick([{ value: 'caller', label: 'Caller' }, { value: 'listener', label: 'Listener' }, { value: 'rendezvous', label: 'Rendezvous' }], 'caller', () => {}, true),
-      h('input.s-field', { value: '1000', disabled: true }),
-      h('button.s-icon-btn', { type: 'button', disabled: true }, icon('x')),
-    ),
-  );
-
   return h(
     'div.s-pane.ndi',
-    section('NDI output mode', [
-      row('NDI mode', radios([{ value: 'full', label: 'NDI Full Bandwidth' }, { value: 'hx3', label: 'NDI HX3', disabled: true }], 'full', () => {}), {}),
-      naRow('Enable proxy stream', tog(false, () => {}, true), { title: NDI_ONLY }),
-      naRow('Video codec', radios([{ value: 'h264', label: 'H.264' }, { value: 'hevc', label: 'H.265 (HEVC)' }], 'h264', () => {}, true), { title: NDI_ONLY }),
-      naRow('Encoding profile', radios([{ value: 'baseline', label: 'Baseline' }, { value: 'main', label: 'Main' }, { value: 'high', label: 'High' }], 'main', () => {}, true), { title: NDI_ONLY }),
-      naRow('Bandwidth control', radios([{ value: 'auto', label: 'Automatic' }, { value: 'manual', label: 'Manual' }], 'auto', () => {}, true), { title: NDI_ONLY }),
-      naRow('Target bitrate', [field(20, () => {}, { cls: 'num', disabled: true }), h('span.s-suffix', 'Mbps (1–100)')], { title: NDI_ONLY }),
-    ]),
     section('NDI discovery', [
       row('Groups', field(s.ndiGroups, (v) => void setSettings({ ndiGroups: v }), { placeholder: 'Public (default)', cls: 'wide' }), {
         info: 'Comma-separated list of NDI groups this source belongs to. Leave empty to use the default Public group. Max 248 bytes total.',
@@ -135,30 +58,6 @@ export function ndiPane(): HTMLElement {
     section('Network adapters', [
       h('div.s-row.s-nics', h('div.s-nics-head', h('div.s-label', 'Allowed interfaces', info('NDI sends only on the ticked adapters. Leave all unticked to use every adapter.')), refresh), ...nicRows),
     ]),
-    section('Multicast', [naRow(h('label.s-check', h('input', { type: 'checkbox', disabled: true }), 'Enable multicast sending'), null, { title: 'Not available in GMeet ISO' })]),
-    section('Tally', [
-      naRow(h('label.s-check', h('input', { type: 'checkbox', disabled: true }), 'Show tally border'), null, {
-        info: 'Displays a border indicating that an NDI receiver has signaled that a GMeet ISO output is on its program or preview buses.',
-        title: 'Not available in GMeet ISO',
-      }),
-      naRow('Program border color', colorWell('#FF0000', () => {}, true), { title: 'Not available in GMeet ISO' }),
-      naRow('Preview border color', colorWell('#00FF00', () => {}, true), { title: 'Not available in GMeet ISO' }),
-    ]),
-    h(
-      'section.s-section.s-srt.na',
-      { title: NOT_IN_MEET },
-      h('div.s-head', h('h2', 'SRT Outputs Settings')),
-      h(
-        'div.s-srt-bar',
-        h('span', 'Encoding Profile:'),
-        pick([{ value: 'bmd', label: 'H264 Blackmagic Design Compatible' }, { value: 'h264', label: 'H.264' }, { value: 'hevc', label: 'H.265 (HEVC)' }], 'bmd', () => {}, true),
-        info('You must use the exact resolution and framerate set on your receiver to avoid compatibility issues.'),
-        h('span.s-spacer'),
-        h('label.s-check', h('input', { type: 'checkbox', disabled: true }), 'Auto-accept caller connections'),
-      ),
-      srtTable,
-      sbtn(h('span.s-btn-inner', icon('plus'), 'Add Channel'), () => {}, { disabled: true, cls: 's-add' }),
-    ),
   );
 }
 

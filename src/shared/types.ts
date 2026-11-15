@@ -1046,8 +1046,7 @@ export const SETTINGS_TAB_OPTIONS: OptionItem<SettingsTab>[] = [
   { value: 'inMeeting', label: 'In Meeting' },
   { value: 'outputEffects', label: 'Output Effects' },
   { value: 'videoLoss', label: 'Video loss settings' },
-  { value: 'audioInputsAndTalkback', label: 'Audio Inputs and Talkback' },
-  { value: 'ndiAndSrt', label: 'NDI and SRT' },
+  { value: 'ndiAndSrt', label: 'NDI' },
   { value: 'osc', label: 'OSC settings' },
   { value: 'recording', label: 'Recording Settings' },
   { value: 'logs', label: 'Logs' },
@@ -1093,7 +1092,6 @@ export const AUDIO_CHANNEL_MODE_OPTIONS: OptionItem<AudioChannelMode>[] = [
   { value: 'mixAll', label: 'All participants' },
   { value: 'mixOutputs', label: 'Mix of all outputs' },
   { value: 'mixUnassigned', label: 'Mix of all unassigned participants' },
-  { value: 'interpretation', label: 'Language', disabled: true, title: NOT_IN_MEET },
 ];
 
 export const PAN_PATTERN_OPTIONS: OptionItem<PanPattern>[] = [
@@ -1113,16 +1111,12 @@ export const AUDIO_PAN_OPTIONS: OptionItem<AudioPan>[] = [
 export const GAIN_REDUCTION_OPTIONS: OptionItem[] = [0, -3, -6, -9, -12, -18, -24].map((db) => ({ value: String(db), label: db === 0 ? '0 dB' : `${db} dB` }));
 
 export const RECORDING_FORMAT_OPTIONS: OptionItem<RecordingFormat>[] = [
-  { value: 'mov', label: 'QuickTime (.mov)', disabled: true, title: 'Not available on Windows' },
   { value: 'mp4', label: 'MPEG-4 (.mp4)' },
-  { value: 'mkv', label: 'Matroska (.mkv)', disabled: true, title: 'Not available in GMeet ISO' },
-  { value: 'mxf', label: 'MXF (.mxf)', disabled: true, title: 'Not available in GMeet ISO' },
 ];
 
 export const RECORDING_CODEC_OPTIONS: OptionItem<RecordingVideoCodec>[] = [
   { value: 'h264', label: 'H.264' },
   { value: 'hevc', label: 'H.265 (HEVC)' },
-  { value: 'proRes422LT', label: 'ProRes 422 LT', disabled: true, title: 'Not available on Windows' },
 ];
 
 /** RecordingDateFormat; `pattern` is the file-name date pattern (date-fns style tokens). */
@@ -1173,7 +1167,6 @@ export const OSC_SUBSCRIBE_MODE_OPTIONS: OptionItem<OscSubscribeMode>[] = [
   { value: 'none', label: 'None' },
   { value: 'targetList', label: 'Target List' },
   { value: 'all', label: 'All participants' },
-  { value: 'panelists', label: 'Panelists', disabled: true, title: NOT_IN_MEET },
   { value: 'gallery', label: 'Gallery' },
 ];
 

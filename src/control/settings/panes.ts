@@ -15,7 +15,7 @@ import {
   type OutputFormat,
   type VideoLossSettings,
 } from '../../shared/types';
-import { colorWell, field, info, localPref, naRow, numField, patchGroup, pick, radios, row, sbtn, section, seg, slider, tog, NOT_IN_MEET } from './ui';
+import { colorWell, field, info, localPref, numField, patchGroup, pick, row, sbtn, section, seg, slider, tog } from './ui';
 
 const sameFormat = (a: OutputFormat | null, b: OutputFormat | null) =>
   a === b || (!!a && !!b && a.width === b.width && a.height === b.height && a.fpsN === b.fpsN && a.fpsD === b.fpsD);
@@ -48,23 +48,10 @@ export function generalPane(): HTMLElement {
   return h(
     'div.s-pane',
     section('Capture settings', [
-      naRow('Capture permissions mode', pick([{ value: 'record', label: 'Record' }, { value: 'live', label: 'Live Stream' }], 'record', () => {}, true)),
       row('Auto-start capture engine on meeting join', tog(s.autoStartEngine, (v) => void setSettings({ autoStartEngine: v }))),
-      naRow('Always request permission from the host', tog(false, () => {}, true)),
     ]),
     section('Render settings', [
-      row(
-        'Rendering engine',
-        radios([{ value: 'legacy', label: 'Canvas 2D (Legacy)', disabled: true }, { value: 'webgl', label: 'WebGL (Recommended)' }], 'webgl', () => {}),
-        { info: 'Some features may be disabled in Canvas 2D rendering mode' },
-      ),
       row('Default format', pick(fmtOpts, String(fmtIdx), (v) => void setSettings({ defaultFormat: FORMAT_PRESETS[Number(v)].format }))),
-      naRow(
-        'Colorspace',
-        pick([{ value: 'auto', label: 'Auto' }, { value: 'rec601', label: 'Rec. 601' }, { value: 'rec709', label: 'Rec. 709' }, { value: 'rec2020', label: 'Rec. 2020' }], 'rec709', () => {}, true),
-        { info: 'In auto mode, colorspace is set automatically based on output format: rec601 is used for 360p and 480p, rec709 is used for 720p and 1080p, and rec2020 is used for 2160p' },
-      ),
-      naRow('Display mouse cursor on content share outputs', tog(false, () => {}, true)),
     ]),
     section('Audio settings', [
       row('Default channel mode', pick(AUDIO_CHANNEL_MODE_OPTIONS, s.advancedAudio.defaultChannelMode, (v) => void patchGroup('advancedAudio', { defaultChannelMode: v }))),
@@ -97,14 +84,6 @@ export function generalPane(): HTMLElement {
         }),
       ),
       row('Warn when reducing output count', tog(warnReduceOutputs.get(), (v) => warnReduceOutputs.set(v)), { title: 'Reducing the output count will delete outputs.' }),
-      naRow('Warn when Talkback requires Host/Co-host role', tog(false, () => {}, true)),
-      naRow('Warn when mic is muted during Talkback', tog(false, () => {}, true)),
-      naRow('Warn when no audio input is routed to Talkback output', tog(false, () => {}, true)),
-      naRow('Bring GMeet ISO to front shortcut', h('span.s-shortcut', 'Press shortcut…'), {
-        info: 'Brings the GMeet ISO window above screen outputs that cover the display. Press it again to put the outputs back on top.',
-        title: 'Not available in GMeet ISO',
-      }),
-      naRow('Show new update available notice', tog(false, () => {}, true), { title: 'Not available in GMeet ISO' }),
     ]),
   );
 }
@@ -130,8 +109,6 @@ export function inMeetingPane(): HTMLElement {
     { value: 'none', label: 'None' },
     { value: 'device', label: 'Webcam' },
     { value: 'ndi', label: 'NDI Source' },
-    { value: 'sdi', label: 'Blackmagic Desktop Video', disabled: true, title: NOT_IN_MEET },
-    { value: 'aja', label: 'AJA', disabled: true, title: NOT_IN_MEET },
   ];
   const withCurrent = (list: string[], cur: string): OptionItem[] => {
     const l = list.map((x) => ({ value: x, label: x }));
@@ -140,13 +117,11 @@ export function inMeetingPane(): HTMLElement {
     return l;
   };
 
-  let sourceRow: HTMLElement;
+  let sourceRow: HTMLElement | null = null;
   if (cam.type === 'device') {
     sourceRow = row('Camera', pick(withCurrent(d.videoInputs, cam.name), cam.name, (v) => void setSettings({ camera: { type: 'device', name: v } })));
   } else if (cam.type === 'ndi') {
     sourceRow = row('NDI Source', pick(withCurrent(store.ndiSources, cam.name), cam.name, (v) => void setSettings({ camera: { type: 'ndi', name: v } })));
-  } else {
-    sourceRow = naRow('Camera', pick([{ value: '', label: 'None' }], '', () => {}, true), { title: 'Select an input source first' });
   }
 
   const mics: OptionItem[] = [{ value: '', label: 'None' }, ...withCurrent(d.audioInputs, s.micLabel).filter((o) => o.value)];
@@ -166,9 +141,6 @@ export function inMeetingPane(): HTMLElement {
         void setSettings({ camera: { type, name } });
       })),
       sourceRow,
-      naRow('Reset raw video input', sbtn('Reset', () => {}, { disabled: true }), {
-        info: 'Reset the raw video input — rebuilds the capture session and the virtual camera without changing the selected source',
-      }),
     ]),
     section('Audio', [
       row('Microphone', pick(mics, s.micLabel, (v) => void setSettings({ micLabel: v }))),
@@ -183,7 +155,6 @@ export function inMeetingPane(): HTMLElement {
       row('Admit everyone who asks to join', tog(s.autoAdmit, (v) => void setSettings({ autoAdmit: v })), { info: 'Requires GMeet ISO to be a host or co-host.' }),
       row('Join notice', field(s.joinNotice, (v) => void setSettings({ joinNotice: v }), { placeholder: 'Off', cls: 'wide' }), { info: 'Chat message posted when GMeet ISO joins. Leave empty to turn off.' }),
     ]),
-    h('div.s-footer-actions', h('button.s-btn.s-open-meet', { type: 'button', disabled: true, title: NOT_IN_MEET }, icon('gear'), 'Open Google Meet Settings')),
   );
 }
 

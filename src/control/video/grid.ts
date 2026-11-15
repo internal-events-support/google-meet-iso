@@ -1,7 +1,7 @@
 // VideoOutputGrid / OutputCard (ZoomISO v3 "Grid" arrangement, page09_img01/img02).
 // Card: StreamTitle + RecordingBadge | StreamToggleView, OpenOutputEffectsButton, OutputStreamOptions (⋯)
 //       VideoPreviewAndAudioIndicators
-//       OutputCardControls: Mode | Selection, StreamStatusView | ParticipantControls (+Talk),
+//       OutputCardControls: Mode | Selection, StreamStatusView | ParticipantControls (mic),
 //                           Output Device | Format | Embedded Audio (captions underneath).
 
 import type { OutputConfig, OutputState } from '../../shared/types';
@@ -112,7 +112,7 @@ export function gridCard(cfg0: OutputConfig): OutputView {
     if (c) setSelection(c, v);
   }, { title: 'Selection' });
   const status = statusLine();
-  const qa = quickActions(() => id, { talk: true });
+  const qa = quickActions(() => id);
 
   const device = popup([], 'ndi', (v) => {
     const c = cfg();

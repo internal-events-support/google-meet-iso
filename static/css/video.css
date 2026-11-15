@@ -32,12 +32,6 @@
 .vo-qa .ico { width: 13px; height: 13px; }
 .vo-qa.muted { color: var(--red); }
 .vo-qa:disabled { opacity: .55; }
-.vo-talk { position: relative; gap: 4px; display: inline-flex; align-items: center; height: 20px; }
-.vo-talk .ico { width: 12px; height: 12px; }
-.vo-talk::after { /* the orange "attention" corner seen in the reference */
-  content: ""; position: absolute; top: -3px; right: -3px; border: 4px solid transparent;
-  border-bottom-color: var(--warning); transform: rotate(45deg);
-}
 .vo-well { background: #000; border-radius: 3px; }
 .vo-well .well-msg { font-size: var(--fs-xxs); color: var(--text-3); letter-spacing: .02em; }
 .vo-meters { display: flex; gap: 2px; flex: none; }

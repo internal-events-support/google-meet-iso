@@ -1,11 +1,10 @@
 // Shared pieces for the Video Outputs views (grid / list / previews):
 // option builders, status readout, quick actions and the output ⋯ menu.
 
-import { EMBEDDED_AUDIO_OPTIONS, FORMAT_PRESETS, NOT_IN_MEET, OUTPUT_MODE_OPTIONS, type OutputConfig, type OutputMode, type OutputState, type ParticipantState } from '../../shared/types';
+import { EMBEDDED_AUDIO_OPTIONS, FORMAT_PRESETS, OUTPUT_MODE_OPTIONS, type OutputConfig, type OutputMode, type OutputState, type ParticipantState } from '../../shared/types';
 import { confirmSheet, h, icon, menu, promptSheet, type OptList } from '../kit';
 import { api, inCall, outputState, run, store, updateOutput } from '../store';
 
-export const UNSUPPORTED = NOT_IN_MEET;
 
 // ---------------------------------------------------------------- mode
 export const MODE_OPTS: OptList = OUTPUT_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
@@ -65,12 +64,7 @@ export function deviceModel(cfg: OutputConfig): { opts: OptList; value: string }
     value = `d:${cfg.display}`;
     if (!displays.some((d) => d.id === cfg.display)) opts.push({ value, label: 'NDI + Display (disconnected)' });
   }
-  return { opts: [...opts, { group: NOT_IN_MEET, options: [
-    { value: 'x-srt', label: 'SRT', disabled: true },
-    { value: 'x-bmd', label: 'Blackmagic Desktop Video', disabled: true },
-    { value: 'x-syphon', label: 'Syphon', disabled: true },
-    { value: 'x-aja', label: 'AJA', disabled: true },
-  ] }], value };
+  return { opts, value };
 }
 export function setDevice(cfg: OutputConfig, v: string): void {
   void updateOutput(cfg.id, { display: v.startsWith('d:') ? Number(v.slice(2)) : null });
@@ -126,7 +120,7 @@ export function statusLine() {
   };
 }
 
-// ---------------------------------------------------------------- quick actions (mic / video / chat / talk)
+// ---------------------------------------------------------------- quick actions (mic mute)
 export function sourceParticipant(st: OutputState | undefined): ParticipantState | undefined {
   if (!st?.sourceKey) return undefined;
   const ps = store.state?.participants ?? [];
@@ -135,21 +129,14 @@ export function sourceParticipant(st: OutputState | undefined): ParticipantState
   return p;
 }
 
-export function quickActions(getId: () => string, opts: { talk?: boolean } = {}) {
+export function quickActions(getId: () => string) {
   const mk = (name: string, title: string) => h('button.icon-btn.vo-qa', { title }, icon(name)) as HTMLButtonElement;
   const mic = mk('mic.outline', 'Mute participant');
-  const cam = mk('camera.outline', `Ask participant to start/stop video: ${UNSUPPORTED}`);
-  cam.disabled = true;
-  const chat = mk('chat.outline', `Private chat: ${UNSUPPORTED}`);
-  chat.disabled = true;
   mic.addEventListener('click', () => {
     const p = sourceParticipant(outputState(getId()));
     if (p) void run({ cmd: 'muteParticipant', participant: p.key });
   });
-  const talk = opts.talk
-    ? (h('button.btn.sm.vo-talk', { title: `Talkback: ${UNSUPPORTED}`, disabled: true }, icon('headset.fill'), 'Talk') as HTMLButtonElement)
-    : null;
-  const el = h('span.vo-qas', mic, cam, chat, talk);
+  const el = h('span.vo-qas', mic);
   return {
     el,
     set(st: OutputState | undefined) {
@@ -159,7 +146,7 @@ export function quickActions(getId: () => string, opts: { talk?: boolean } = {})
       mic.title = !p
         ? 'Please assign a participant to the stream'
         : muted
-          ? `${p.displayName} is muted. Unmuting others: ${UNSUPPORTED}`
+          ? `${p.displayName} is muted`
           : p.muted === null ? 'Mic state unknown' : `Mute ${p.displayName} (requires host)`;
       const want = muted ? 'mic.slash.outline' : 'mic.outline';
       if (mic.dataset.ico !== want) {
@@ -167,12 +154,6 @@ export function quickActions(getId: () => string, opts: { talk?: boolean } = {})
         mic.replaceChildren(icon(want));
       }
       mic.classList.toggle('muted', muted);
-      const vidOff = !!p && p.kind === 'camera' && !p.hasVideo;
-      const wantCam = vidOff ? 'camera.slash.outline' : 'camera.outline';
-      if (cam.dataset.ico !== wantCam) {
-        cam.dataset.ico = wantCam;
-        cam.replaceChildren(icon(wantCam));
-      }
     },
   };
 }
