@@ -238,7 +238,7 @@ export function returnFeedBar(): HTMLElement {
     h('div.rf-fields', field(inputSource.el, 'Input Source'), field(camera.el, 'Camera'), field(mic.el, 'Microphone'), field(speaker.el, 'Speaker')),
     h('div.rf-spacer'),
     h('div.rf-stats', h('div.col', cpu, ram), h('div.col', outs, net), perfBtn),
-    h('div.rf-right', chatBtn, h('div.version', meetLink, h('span', 'v0.2.0 (beta)'))));
+    h('div.rf-right', chatBtn, h('div.version', meetLink, h('span', __APP_VERSION__))));
   render();
   renderSys();
   renderChat();

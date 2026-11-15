@@ -19,6 +19,7 @@ const options = {
   platform: 'browser',
   target: 'chrome130',
   sourcemap: true,
+  define: { __APP_VERSION__: JSON.stringify('v' + require('../package.json').version) },
   logLevel: 'info',
 };
 

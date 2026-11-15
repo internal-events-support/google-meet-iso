@@ -7,7 +7,7 @@ import { NOT_IN_MEET } from '../../shared/types';
 import { button, h, icon, popup, type OptList } from '../kit';
 import { api, bindPreview, inCall, on, refreshNdi, run, setSettings, store } from '../store';
 
-const VERSION = 'v0.2.0 (beta)';
+const VERSION = __APP_VERSION__;
 let meetWindowVisible = false;
 
 // ---------------------------------------------------------------------------
