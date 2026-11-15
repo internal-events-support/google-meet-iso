@@ -16,6 +16,8 @@ import {
   inCall,
   meetingPhase,
   micOn,
+  accountName,
+  setBotName,
   setDevice,
   tryAutoJoin,
 } from './dom';
@@ -126,6 +128,11 @@ function sendPreview(key: string, jpeg: ArrayBuffer): void {
   ipcRenderer.send(IPC.meetPreview, key, new Uint8Array(jpeg));
 }
 
+function applySettings(): void {
+  setBotName(settings.botName);
+  applyMediaSettings();
+}
+
 function applyMediaSettings(): void {
   const root = document.documentElement;
   if (root) root.dataset.gmeetIsoMic = settings.micLabel || '';
@@ -134,6 +141,15 @@ function applyMediaSettings(): void {
 
 function tick(): void {
   const { phase } = meetingPhase();
+
+  // Learn the bot's account name (shown on Meet's account button outside calls).
+  const acct = accountName();
+  if (acct && acct !== settings.botName) {
+    settings = { ...settings, botName: acct };
+    setBotName(acct);
+    ipcRenderer.send(IPC.meetBotName, acct);
+    log(`Bot account: ${acct}`);
+  }
 
   if (settings.autoJoin && phase !== 'in-call' && Date.now() - lastDialogDismiss > 2000 && dismissDeviceDialog()) {
     lastDialogDismiss = Date.now();
@@ -258,7 +274,7 @@ if (isMeet) {
   ipcRenderer.on(IPC.meetSettings, (_e, s: Settings) => {
     const prefixChanged = s.ndiPrefix !== settings.ndiPrefix || s.ndiGroups !== settings.ndiGroups;
     settings = s;
-    applyMediaSettings();
+    applySettings();
     if (prefixChanged) for (const f of feeds.values()) if (f.published) f.publish(ndiNameFor(f));
   });
   ipcRenderer.on(IPC.meetFeedEnabled, (_e, key: string, enabled: boolean) => {
@@ -292,7 +308,7 @@ if (isMeet) {
     botCam = new BotCamera(ndi?.Receiver ?? null, log);
     void ipcRenderer.invoke(IPC.meetGetSettings).then((s: Settings) => {
       settings = s;
-      applyMediaSettings();
+      applySettings();
     });
     window.setInterval(() => {
       try {

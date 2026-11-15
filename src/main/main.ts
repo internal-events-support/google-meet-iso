@@ -257,6 +257,11 @@ function registerIpc(): void {
     fs.writeFile(path.join(app.getPath('userData'), 'devices.json'), JSON.stringify(d, null, 2), () => {});
   });
   ipcMain.on(IPC.meetLog, (_e, line: string) => log(`[meet] ${line}`));
+  ipcMain.on(IPC.meetBotName, (_e, name: string) => {
+    if (!name || name === settings.botName) return;
+    settings = { ...settings, botName: name };
+    saveSettings();
+  });
 }
 
 // ---------- dev/automation commands ----------
@@ -270,6 +275,7 @@ async function runCommand(cmd: string): Promise<void> {
   const ud = app.getPath('userData');
   try {
     if (cmd.startsWith('join:')) await joinMeeting(cmd.slice(5));
+    else if (cmd === 'quit') app.quit();
     else if (cmd === 'leave') await leaveMeeting();
     else if (cmd === 'dump') await dumpMeetDom();
     else if (cmd === 'snap') {
@@ -333,7 +339,18 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.on('before-quit', () => {
+// Leave the call cleanly on quit so the account isn't left as a ghost participant
+// (which makes the next join show "Switch here" instead of "Join now").
+let lastPhase = '';
+let leftOnQuit = false;
+ipcMain.on(IPC.meetState, (_e, s: MeetState) => (lastPhase = s.phase));
+app.on('before-quit', (e) => {
   quitting = true;
+  if (!leftOnQuit && meetWin && !meetWin.isDestroyed() && (lastPhase === 'in-call' || lastPhase === 'waiting')) {
+    e.preventDefault();
+    leftOnQuit = true;
+    meetWin.webContents.send(IPC.meetLeave);
+    setTimeout(() => app.quit(), 1200);
+  }
 });
 app.on('window-all-closed', () => app.quit());

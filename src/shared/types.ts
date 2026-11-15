@@ -36,6 +36,8 @@ export interface Settings {
   previewFps: number;
   /** Last meeting link entered. */
   lastMeetUrl: string;
+  /** Bot's Google account display name; used to exclude its own tile. Auto-learned. */
+  botName: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -53,6 +55,7 @@ export const DEFAULT_SETTINGS: Settings = {
   micLabel: '',
   previewFps: 8,
   lastMeetUrl: '',
+  botName: '',
 };
 
 export type FeedKind = 'camera' | 'screen';
@@ -160,6 +163,7 @@ export const IPC = {
   meetSetCam: 'meet:setCam',
   meetSetMic: 'meet:setMic',
   meetLeave: 'meet:leave',
+  meetBotName: 'meet:botName',
 } as const;
 
 /** Preview key used for the bot's own outgoing camera. */

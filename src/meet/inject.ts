@@ -45,6 +45,10 @@ export function installMediaShim(): void {
       camStream = (getCanvas() as HTMLCanvasElement & { captureStream(fps?: number): MediaStream }).captureStream(30);
     }
     const t = camStream.getVideoTracks()[0].clone();
+    // Let the isolated world recognise the bot's own tile by track id.
+    const ids = (root()?.dataset.gmeetIsoCamTracks ?? '').split(',').filter(Boolean).slice(-20);
+    ids.push(t.id);
+    root()?.setAttribute('data-gmeet-iso-cam-tracks', ids.join(','));
     // Make the track look like a camera to Meet.
     Object.defineProperty(t, 'label', { value: 'GMeet ISO Camera' });
     const origSettings = t.getSettings.bind(t);

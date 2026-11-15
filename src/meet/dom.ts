@@ -76,6 +76,37 @@ function presenterName(name: string): string {
   return cleanName(name.replace(/\(presentation\)|\bis presenting\b|\bpresentation\b|\bpresenting\b/gi, ''));
 }
 
+/** Bot account display name (from settings), set by the preload. */
+let botName = '';
+export function setBotName(n: string): void {
+  botName = cleanName(n).toLowerCase();
+}
+
+/** True if any <video> in the tile plays a camera track our media shim handed to Meet. */
+function playsOwnCamera(tile: HTMLElement): boolean {
+  const ids = document.documentElement?.dataset.gmeetIsoCamTracks;
+  if (!ids) return false;
+  const set = new Set(ids.split(','));
+  for (const v of Array.from(tile.querySelectorAll('video'))) {
+    const s = v.srcObject;
+    if (s instanceof MediaStream && s.getVideoTracks().some((t) => set.has(t.id))) return true;
+  }
+  return false;
+}
+
+/** Participant ids learned to be the bot (sticky for the page lifetime). */
+const selfIds = new Set<string>();
+
+/** Read the signed-in account's name from Meet's account button ("Google Account: Name (email)"). */
+export function accountName(): string {
+  for (const el of Array.from(document.querySelectorAll('[aria-label*="Google Account" i]'))) {
+    const label = el.getAttribute('aria-label') ?? '';
+    const m = label.match(/Google Account:\s*([^(\n]+?)\s*(\(|\n|$)/i);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  return '';
+}
+
 /** Find every participant tile currently in the DOM, deduplicated by key. */
 export function findTiles(): TileInfo[] {
   const nodes = Array.from(document.querySelectorAll<HTMLElement>(`[${TILE_ATTR}]`));
@@ -95,7 +126,12 @@ export function findTiles(): TileInfo[] {
     if (!el.querySelector('video') && (r.width < 120 || r.height < 80)) continue;
 
     const rawName = nameFromTile(el);
-    const isSelf = !!el.querySelector('[data-self-name]');
+    // Meet doesn't mark the local tile, so: our camera track, or the bot's account name.
+    if (playsOwnCamera(el)) selfIds.add(participantId);
+    const isSelf =
+      !!el.querySelector('[data-self-name]') ||
+      selfIds.has(participantId) ||
+      (!!botName && cleanName(rawName).toLowerCase() === botName);
     const isScreen = isScreenTile(el, rawName);
     const displayName = (isScreen ? presenterName(rawName) : rawName) || participantId.split('/').pop() || 'Unknown';
     const key = isScreen ? `${participantId}:screen` : participantId;
@@ -132,6 +168,10 @@ function bodyText(): string {
   return cleanName(document.body?.innerText ?? '').slice(0, 4000);
 }
 
+/** Green-room join buttons. "Switch here" appears when this account is already in the call
+ *  elsewhere (e.g. a previous bot session that hasn't timed out) and moves the call here. */
+const JOIN_BUTTON_RE = /^(join now|ask to join|join|switch here|join here too)$/i;
+
 const WAITING_RE = /please wait until a meeting host brings you|asking to be let in|you'll join the call when someone lets you in|waiting for the host|asking to join\.\.\./i;
 const DENIED_RE = /you can't join this (video )?call|someone in the call denied your request|your request to join was denied|no one responded to your request|you can't create a meeting yourself|meeting code (has expired|isn't valid)|check your meeting code/i;
 const ENDED_RE = /you left the meeting|you've been removed from the meeting|you have been removed|the call has ended|meeting has ended|returning to home screen|rejoin/i;
@@ -161,7 +201,7 @@ export function meetingPhase(): { phase: import('../shared/types').MeetPhase; de
   }
   if (DENIED_RE.test(text)) return { phase: 'denied', detail: firstMatch(DENIED_RE) };
   if (ENDED_RE.test(text) && /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(location.pathname)) return { phase: 'ended', detail: firstMatch(ENDED_RE) };
-  if (findButton(/^(join now|ask to join|join)$/i)) return { phase: 'green-room', detail: 'Ready to join' };
+  if (findButton(JOIN_BUTTON_RE)) return { phase: 'green-room', detail: 'Ready to join' };
   if (/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(location.pathname)) return { phase: 'loading', detail: 'Opening meeting…' };
   return { phase: 'home', detail: '' };
 }
@@ -225,7 +265,7 @@ export function dismissDeviceDialog(): boolean {
 
 /** Click "Join now" / "Ask to join" on the green room page if present. */
 export function tryAutoJoin(): boolean {
-  const b = findButton(/^(join now|ask to join|join)$/i);
+  const b = findButton(JOIN_BUTTON_RE);
   if (!b) return false;
   b.click();
   return true;

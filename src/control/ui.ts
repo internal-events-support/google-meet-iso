@@ -220,7 +220,7 @@ async function refreshNdi(): Promise<void> {
 
 // ---------------- settings form ----------------
 const SETTING_KEYS = [
-  'ndiPrefix', 'ndiGroups', 'maxFps', 'graceSeconds', 'meetWindowWidth', 'meetWindowHeight', 'previewFps',
+  'botName', 'ndiPrefix', 'ndiGroups', 'maxFps', 'graceSeconds', 'meetWindowWidth', 'meetWindowHeight', 'previewFps',
   'screenShare', 'includeSelf', 'autoJoin', 'muteLocalAudio',
 ] as const;
 
