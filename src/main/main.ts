@@ -1233,6 +1233,10 @@ function registerIpc(): void {
   let lastStateWrite = 0;
   ipcMain.on(IPC.meetState, (_e, s: MeetState) => {
     lastState = s;
+    // We read frames from Meet's tracks, never the page's pixels: in a call, repaint the hidden page at
+    // 1 fps (measured: GPU 46% -> 16%, CPU 1.8 -> 1.0 cores, capture rate unchanged). Full rate otherwise.
+    const paintFps = s.inCall ? 1 : 30;
+    if (meetWin && !meetWin.isDestroyed() && meetWin.webContents.getFrameRate() !== paintFps) meetWin.webContents.setFrameRate(paintFps);
     oscRouter.onState(s); // [osc-agent]
     broadcast(IPC.state, s);
     if (Date.now() - lastStateWrite > 1000) {
@@ -1282,6 +1286,9 @@ async function runCliCommand(cmd: string): Promise<void> {
       const img = await controlWin?.webContents.capturePage();
       if (img) fs.writeFileSync(path.join(ud, `${name}.png`), img.toPNG());
       log(`snapshot saved: ${name}.png`);
+    } else if (cmd.startsWith('meet-fps:')) {
+      meetWin?.webContents.setFrameRate(Number(cmd.slice(9)) || 30);
+      log(`Meet paint rate → ${meetWin?.webContents.getFrameRate()} fps`);
     } else if (cmd === 'reload-ui') {
       // Reload every UI window after `npm run build:ui` (no app restart, call stays up).
       controlWin?.webContents.reloadIgnoringCache();
