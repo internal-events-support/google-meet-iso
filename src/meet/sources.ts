@@ -1,10 +1,12 @@
 // Participant sources: one tap per Meet tile. Reads the tile's live video track with
 // MediaStreamTrackProcessor (independent of the offscreen paint rate) and keeps the latest
-// VideoFrame for any number of outputs to render from.
+// VideoFrame for any number of outputs to render from. Reading runs in a worker on a clone of the
+// track (see trackworker.ts); main-thread MSTP is the fallback.
 
 import type { FeedKind } from '../shared/types';
 import { pickVideo } from './dom';
 import { Thumbnailer } from './camsource';
+import { readInWorker } from './trackworker';
 
 // Chrome-only Insertable Streams API (not in TS's DOM lib).
 declare const MediaStreamTrackProcessor: {
@@ -43,6 +45,9 @@ export class SourceTap {
   private trackId = '';
   private reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
   private readerToken = 0;
+  private stopWorker: (() => void) | null = null;
+  /** 'worker' | 'main' | 'element' | '' — which capture path is active (diagnostics). */
+  capturePath = '';
   private rvfcHandle: number | null = null;
   private fallbackTimer = 0;
   private thumb = new Thumbnailer(240);
@@ -96,8 +101,9 @@ export class SourceTap {
       this.video = v;
       if (track && newTrackId && typeof MediaStreamTrackProcessor === 'function') {
         this.trackId = newTrackId;
-        void this.readTrack(track);
+        if (!this.readInWorker(track)) void this.readTrack(track);
       } else if (v) {
+        this.capturePath = 'element';
         // Fallback: snapshot the element at ~30 fps.
         this.fallbackTimer = window.setInterval(() => {
           if (!this.video || this.video.readyState < 2) return;
@@ -120,7 +126,10 @@ export class SourceTap {
     this.readerToken++;
     this.reader?.cancel().catch(() => {});
     this.reader = null;
+    this.stopWorker?.();
+    this.stopWorker = null;
     this.trackId = '';
+    this.capturePath = '';
     if (this.fallbackTimer) window.clearInterval(this.fallbackTimer);
     this.fallbackTimer = 0;
     if (this.video && this.rvfcHandle != null) this.video.cancelVideoFrameCallback?.(this.rvfcHandle);
@@ -128,8 +137,34 @@ export class SourceTap {
     this.video = null;
   }
 
+  private readInWorker(track: MediaStreamTrack): boolean {
+    const token = ++this.readerToken;
+    const stop = readInWorker(
+      track,
+      {
+        onFrame: (f) => {
+          if (token !== this.readerToken) f.close();
+          else this.accept(f);
+        },
+        onEnd: (err) => {
+          if (token !== this.readerToken) return;
+          if (err) this.log(`worker track reader [${this.displayName}]: ${err}`);
+          this.stopWorker = null;
+          this.trackId = ''; // next bindTile re-reads if the track is still live
+        },
+      },
+      this.log,
+    );
+    if (!stop) return false;
+    this.stopWorker = stop;
+    this.capturePath = 'worker';
+    this.log(`capture [${this.displayName}]: worker ${track.id.slice(0, 8)}`);
+    return true;
+  }
+
   private async readTrack(track: MediaStreamTrack): Promise<void> {
     const token = ++this.readerToken;
+    this.capturePath = 'main';
     try {
       const proc = new MediaStreamTrackProcessor({ track, maxBufferSize: 2 });
       const reader = proc.readable.getReader();
