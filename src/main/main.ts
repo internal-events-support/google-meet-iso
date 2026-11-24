@@ -66,7 +66,7 @@ const platformUA =
 const CHROME_UA = `Mozilla/5.0 (${platformUA}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
 app.userAgentFallback = CHROME_UA;
 // Own taskbar identity on Windows (otherwise grouped/iconed as generic "Electron").
-if (process.platform === 'win32') app.setAppUserModelId('com.nerif-tafu.google-meet-iso');
+if (process.platform === 'win32') app.setAppUserModelId('com.neriftafu.google-meet-iso');
 
 const MEET_PARTITION = 'persist:meet';
 const MEET_HOME = 'https://meet.google.com/';

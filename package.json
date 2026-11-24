@@ -35,11 +35,11 @@
   },
   "private": true,
   "productName": "Google Meet ISO",
-  "author": "nerif-tafu",
+  "author": "neriftafu",
   "build": {
-    "appId": "com.nerif-tafu.google-meet-iso",
+    "appId": "com.neriftafu.google-meet-iso",
     "productName": "Google Meet ISO",
-    "copyright": "Copyright © 2026 nerif-tafu",
+    "copyright": "Copyright © 2026 neriftafu",
     "npmRebuild": false,
     "directories": {
       "output": "release"
