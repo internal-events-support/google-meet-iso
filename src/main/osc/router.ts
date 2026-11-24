@@ -1,4 +1,4 @@
-// ZoomOSC / ZoomISO v3 compatible OSC router for GMeet ISO.
+// ZoomOSC / ZoomISO v3 compatible OSC router for Google Meet ISO.
 //
 // Incoming:  /{gmeet|gmeetiso|zoom|zoomosc}/[target]/<command> args…
 //   target  = userName <str> | galleryIndex|galIndex <int> | zoomID|targetID <int> | pID|participantID <str>

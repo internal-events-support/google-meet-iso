@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, type MenuItemConstructorOptions } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   DEFAULT_EFFECTS,
@@ -28,10 +29,28 @@ import {
   type WindowKind,
 } from '../shared/types';
 import { ApiServer } from './api';
+import { carryOver, OldAppRunning } from './carryover';
 import { applyNdiConfig } from './ndiconfig';
 import { OscServer, type OscArg, type OscMessage } from './osc';
 import { OscRouter, setActiveRouter } from './osc/router'; // [osc-agent]
-// userData = %APPDATA%/GMeet ISO (from productName) for both dev and packaged runs.
+// userData = %APPDATA%/Google Meet ISO (from productName) for both dev and packaged runs.
+
+const firstInstance = app.requestSingleInstanceLock();
+// Before anything opens the profile: bring settings and the Google sign-in over from GMeet ISO.
+if (firstInstance && !app.commandLine.hasSwitch('user-data-dir')) {
+  try {
+    const from = carryOver(app.getPath('appData'), app.getPath('userData'), path.join(os.homedir(), 'Videos', 'GMeet ISO'));
+    if (from) console.log(`Copied settings and sign-in from ${from}`);
+  } catch (e) {
+    const text =
+      e instanceof OldAppRunning
+        ? 'GMeet ISO is still running. Close it, then start Google Meet ISO again.'
+        : `Settings from GMeet ISO could not be copied. Nothing was changed. Start the app again to retry.\n\n${(e as Error).message}`;
+    dialog.showErrorBox('Google Meet ISO', text);
+    app.exit(1);
+    process.exit(1);
+  }
+}
 
 // Keep the hidden Meet client rendering/decoding at full rate.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -47,7 +66,7 @@ const platformUA =
 const CHROME_UA = `Mozilla/5.0 (${platformUA}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
 app.userAgentFallback = CHROME_UA;
 // Own taskbar identity on Windows (otherwise grouped/iconed as generic "Electron").
-if (process.platform === 'win32') app.setAppUserModelId('com.gmeet-iso.app');
+if (process.platform === 'win32') app.setAppUserModelId('com.nerif-tafu.google-meet-iso');
 
 const MEET_PARTITION = 'persist:meet';
 const MEET_HOME = 'https://meet.google.com/';
@@ -258,7 +277,7 @@ function createControlWindow(): void {
     height: 920,
     minWidth: 1100,
     minHeight: 680,
-    title: 'GMeet ISO',
+    title: 'Google Meet ISO',
     icon: ICON,
     backgroundColor: '#1e1e1e',
     // ZoomISO-style unified toolbar: our top bar is the title bar; Windows caption buttons overlay it.
@@ -445,7 +464,7 @@ function applySettingsPatch(patch: Partial<Settings>): Settings {
     (patch.ndiNicIps !== undefined && patch.ndiNicIps !== prev.ndiNicIps)
   ) {
     applyNdiConfig(app.getPath('userData'), settings.ndiDiscoveryServer, settings.ndiNicIps);
-    log('NDI network settings saved — restart GMeet ISO to apply');
+    log('NDI network settings saved — restart Google Meet ISO to apply');
   }
   pushSettings();
   return settings;
@@ -694,7 +713,7 @@ const SHOW_KEYS: (keyof Settings)[] = [
 
 async function saveShow(file?: string): Promise<string | null> {
   if (!file) {
-    const r = await dialog.showSaveDialog(controlWin!, { title: 'Save show', defaultPath: 'show.gmiso', filters: [{ name: 'GMeet ISO show', extensions: ['gmiso'] }] });
+    const r = await dialog.showSaveDialog(controlWin!, { title: 'Save show', defaultPath: 'show.gmiso', filters: [{ name: 'Google Meet ISO show', extensions: ['gmiso'] }] });
     if (r.canceled || !r.filePath) return null;
     file = r.filePath;
   }
@@ -707,7 +726,7 @@ async function saveShow(file?: string): Promise<string | null> {
 
 async function loadShow(file?: string, merge = false): Promise<string | null> {
   if (!file) {
-    const r = await dialog.showOpenDialog(controlWin!, { title: 'Open show', properties: ['openFile'], filters: [{ name: 'GMeet ISO show', extensions: ['gmiso', 'json'] }] });
+    const r = await dialog.showOpenDialog(controlWin!, { title: 'Open show', properties: ['openFile'], filters: [{ name: 'Google Meet ISO show', extensions: ['gmiso', 'json'] }] });
     if (r.canceled || !r.filePaths[0]) return null;
     file = r.filePaths[0];
   }
@@ -990,7 +1009,7 @@ async function clearCache(ask: boolean): Promise<boolean> {
       cancelId: 0,
       title: 'Clear Cache',
       message: 'Clear Cache (app will close)',
-      detail: 'All GMeet ISO settings and outputs are reset to defaults and the app quits. Export your configuration first if you want to keep it.',
+      detail: 'All Google Meet ISO settings and outputs are reset to defaults and the app quits. Export your configuration first if you want to keep it.',
     });
     if (r.response !== 1) return false;
   }
@@ -1011,15 +1030,15 @@ async function clearCache(ask: boolean): Promise<boolean> {
 function buildAppMenu(): Menu {
   const tpl: MenuItemConstructorOptions[] = [
     {
-      label: 'GMeet ISO',
+      label: 'Google Meet ISO',
       submenu: [
         {
-          label: 'About GMeet ISO',
+          label: 'About Google Meet ISO',
           click: () =>
             void msgBox({
               type: 'info',
-              title: 'About GMeet ISO',
-              message: `GMeet ISO ${app.getVersion()}`,
+              title: 'About Google Meet ISO',
+              message: `Google Meet ISO ${app.getVersion()}`,
               detail: `Isolated NDI outputs from Google Meet.\nElectron ${process.versions.electron} · Chromium ${process.versions.chrome}`,
               icon: ICON,
             }),
@@ -1030,7 +1049,7 @@ function buildAppMenu(): Menu {
         { label: 'Sign in with embedded browser', click: () => openSignIn() },
         { label: 'Sign Out', click: () => void signOut().catch((e) => log(`sign out failed: ${(e as Error).message}`)) },
         { type: 'separator' },
-        { label: 'Quit GMeet ISO', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+        { label: 'Quit Google Meet ISO', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
     },
     {
@@ -1069,7 +1088,7 @@ function buildAppMenu(): Menu {
       label: 'Help',
       submenu: [
         {
-          label: 'GMeet ISO Help',
+          label: 'Google Meet ISO Help',
           accelerator: 'F1',
           click: () => {
             const readme = path.join(__dirname, '..', '..', 'README.md');
@@ -1129,7 +1148,7 @@ function syncDisplays(): void {
       fullscreen: true,
       skipTaskbar: true,
       backgroundColor: '#000000',
-      title: `GMeet ISO — ${want.name}`,
+      title: `Google Meet ISO — ${want.name}`,
       webPreferences: { preload: path.join(__dirname, '..', 'display', 'preload.js'), contextIsolation: true, sandbox: false },
     });
     win.setMenuBarVisibility(false);
@@ -1192,10 +1211,10 @@ function registerIpc(): void {
       return r.canceled ? null : (r.filePaths[0] ?? null);
     }
     if (kind === 'show-save') {
-      const r = await dialog.showSaveDialog(controlWin, { defaultPath: 'show.gmiso', filters: [{ name: 'GMeet ISO show', extensions: ['gmiso'] }] });
+      const r = await dialog.showSaveDialog(controlWin, { defaultPath: 'show.gmiso', filters: [{ name: 'Google Meet ISO show', extensions: ['gmiso'] }] });
       return r.canceled ? null : (r.filePath ?? null);
     }
-    const r = await dialog.showOpenDialog(controlWin, { properties: ['openFile'], filters: [{ name: 'GMeet ISO show', extensions: ['gmiso', 'json'] }] });
+    const r = await dialog.showOpenDialog(controlWin, { properties: ['openFile'], filters: [{ name: 'Google Meet ISO show', extensions: ['gmiso', 'json'] }] });
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle(IPC.system, () => systemStats());
@@ -1215,7 +1234,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.openPath, (_e, kind: 'recordings' | 'logs' | 'userData') => {
     const dir =
-      kind === 'recordings' ? settings.recordDir || path.join(app.getPath('videos'), 'GMeet ISO') : app.getPath('userData');
+      kind === 'recordings' ? settings.recordDir || path.join(app.getPath('videos'), 'Google Meet ISO') : app.getPath('userData');
     fs.mkdirSync(dir, { recursive: true });
     void shell.openPath(dir);
   });
@@ -1343,7 +1362,7 @@ function cmdFromArgv(argv: string[]): string | null {
   return a ? a.slice(6) : null;
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (!firstInstance) {
   app.quit();
 } else {
   app.on('second-instance', (_e, argv) => {

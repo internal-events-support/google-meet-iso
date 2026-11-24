@@ -66,7 +66,7 @@ export function recordingPane(): HTMLElement {
   const s = store.settings;
   const r = s.recording;
   const disk = store.system?.disk ?? null;
-  const dir = s.recordDir || disk?.path || 'Videos\\GMeet ISO';
+  const dir = s.recordDir || disk?.path || 'Videos\\Google Meet ISO';
   const low = disk ? (disk.freeGB / Math.max(1, disk.totalGB)) * 100 < r.lowDiskWarningPercent : false;
 
   const ext = r.format;
@@ -169,7 +169,7 @@ export function logsPane(fixedGroup?: 'OSC'): { el: HTMLElement; dispose(): void
   });
   const save = () => {
     const blob = new Blob([store.log.join('\r\n') + '\r\n'], { type: 'text/plain' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `gmeet-iso-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt` }) as HTMLAnchorElement;
+    const a = h('a', { href: URL.createObjectURL(blob), download: `google-meet-iso-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt` }) as HTMLAnchorElement;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };

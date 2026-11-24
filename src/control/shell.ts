@@ -80,7 +80,7 @@ function topBar(): HTMLElement {
   renderAvatar();
 
   return h('header.topbar',
-    h('div.left', h('span.app-title', 'GMeet ISO')),
+    h('div.left', h('span.app-title', 'Google Meet ISO')),
     h('div.center', nav.el),
     h('div.right', recBtn, settingsBtn, avatar));
 }

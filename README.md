@@ -1,9 +1,9 @@
-# GMeet ISO
+# Google Meet ISO
 
 Zoom-ISO-style isolated feeds for Google Meet. A hidden, signed-in bot joins the meeting,
-and GMeet ISO publishes a fixed set of **output slots** as NDI sources (`MACHINE (GMEET 1)`,
+and Google Meet ISO publishes a fixed set of **output slots** as NDI sources (`MACHINE (GMEET 1)`,
 `MACHINE (GMEET Speaker)`, …). Each slot follows a participant, the active speaker, or the
-screen share. The operator only ever sees the GMeet ISO control app; the Meet window is
+screen share. The operator only ever sees the Google Meet ISO control app; the Meet window is
 never shown.
 
 ## What the operator sees
@@ -121,7 +121,7 @@ npm start
 3. Pick the bot's **Camera source** and **Microphone** on the right.
 4. Pull the `GMEET …` outputs into vMix / OBS / TriCaster.
 
-Recordings go to `Videos\GMeet ISO\<output>_<date-time>.mp4` (fragmented MP4, readable
+Recordings go to `Videos\Google Meet ISO\<output>_<date-time>.mp4` (fragmented MP4, readable
 while recording). They run at the source's real frame rate (variable).
 
 ## Testing without a meeting
@@ -133,7 +133,7 @@ npm run verify:ndi    # discovers GMEET sources and receives one frame from each
 
 ## Dev / automation commands
 
-With the app running, launch a second instance with `--cmd=`. Output goes to `%APPDATA%/gmeet-iso/`:
+With the app running, launch a second instance with `--cmd=`. Output goes to `%APPDATA%/Google Meet ISO/`:
 
 | command | effect |
 |---|---|

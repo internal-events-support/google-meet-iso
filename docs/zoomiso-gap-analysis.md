@@ -1,4 +1,4 @@
-# ZoomISO → GMeet ISO: feature & UX gap analysis
+# ZoomISO → Google Meet ISO: feature & UX gap analysis
 
 Sources:
 - ZoomISO v2.4 User Guide (PDF)
@@ -14,18 +14,18 @@ output has a stable name, a *mode* (what to show) and a *selection* (who), and t
 routes people into those slots. Downstream switchers bind to stable source names that never
 change when guests come and go.
 
-GMeet ISO today is **participant-centric**: one NDI source appears per participant, named
+Google Meet ISO today is **participant-centric**: one NDI source appears per participant, named
 after them, and disappears when they leave. That suits a quick ISO setup, but it isn't how a
 broadcast operator works. A vMix input labelled "Guest 1" should stay "Guest 1" all show.
 
 **This is the single biggest gap**, and most of the other features hang off it.
 
-## 2. ZoomISO feature inventory vs GMeet ISO
+## 2. ZoomISO feature inventory vs Google Meet ISO
 
 Legend: ✅ have · 🟡 partial · ❌ missing · ⛔ not possible on Google Meet (platform limit)
 
 ### Video outputs
-| ZoomISO feature | Notes | GMeet ISO |
+| ZoomISO feature | Notes | Google Meet ISO |
 |---|---|---|
 | Number of outputs (+/−), stable output names, rename | Output slots | ❌ (auto per-participant only) |
 | Per-output enable toggle | | 🟡 per-participant toggle |
@@ -46,7 +46,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · ⛔ not possible on Google Me
 | Rec.601/709/2020 colour settings; mouse-pointer rendering on screenshare | v3.0.6 | ❌ |
 
 ### Audio
-| ZoomISO feature | GMeet ISO |
+| ZoomISO feature | Google Meet ISO |
 |---|---|
 | Embedded ISO / mix audio in NDI | ❌ |
 | Advanced Audio: any multichannel device (Dante VSC, Loopback, BlackHole); multiple devices at once | ❌ |
@@ -56,7 +56,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · ⛔ not possible on Google Me
 | True per-participant ISO audio for everyone | ⛔ partial: the Meet web client only receives the **3 loudest** streams |
 
 ### Meeting / participants
-| ZoomISO feature | GMeet ISO |
+| ZoomISO feature | Google Meet ISO |
 |---|---|
 | Sign in with platform account | ✅ Google sign-in |
 | Join / leave meeting | ✅ |
@@ -69,7 +69,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · ⛔ not possible on Google Me
 | Capture consent (Live Stream / Recording permission, petition host) | n/a. Meet has no raw-media consent API. See the ethics note in §5. |
 
 ### Engine, control, ops
-| ZoomISO feature | GMeet ISO |
+| ZoomISO feature | Google Meet ISO |
 |---|---|
 | Master **Capture Enabled** toggle | ❌ |
 | Engine states **Disabled / Standing By / Enabled**: outputs published but on loss mode while standing by | ❌ always on |
@@ -82,7 +82,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · ⛔ not possible on Google Me
 | System utilisation warning (CPU > 80%, bandwidth cap) | ❌ |
 | Licensing / trial card | n/a |
 
-### Things GMeet ISO has that ZoomISO doesn't
+### Things Google Meet ISO has that ZoomISO doesn't
 - **NDI source as the bot's camera**, switchable live. ZoomISO's return feed is a device picker.
 - Runs on Windows (ZoomISO is macOS / Apple Silicon only).
 - No platform licence or Workspace add-on needed.

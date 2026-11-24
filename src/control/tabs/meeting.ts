@@ -27,7 +27,7 @@ function splash(): HTMLElement {
     h('div.splash-deco.r'),
     h('div.splash-center',
       h('img.splash-logo', { src: 'icon.png', alt: '' }),
-      h('div.splash-name', 'GMeet ISO', h('span.beta-badge', 'BETA')),
+      h('div.splash-name', 'Google Meet ISO', h('span.beta-badge', 'BETA')),
       h('div.splash-sub', 'Isolated broadcast outputs from', h('br'), 'Google Meet meetings'),
       signIn),
     h('div.mt-footer', footLink(), h('span', VERSION)));
@@ -111,7 +111,7 @@ function joinView() {
   const accountRow = h('div.mt-account', icon('person'), account, switchBtn);
 
   const card = h('div.mt-join-card.card',
-    h('div.mt-brand', h('img.mt-logo', { src: 'icon.png', alt: '' }), h('div', h('div.mt-brand-name', 'GMeet ISO'), h('div.mt-brand-sub', 'Isolated broadcast outputs from Google Meet'))),
+    h('div.mt-brand', h('img.mt-logo', { src: 'icon.png', alt: '' }), h('div', h('div.mt-brand-name', 'Google Meet ISO'), h('div.mt-brand-sub', 'Isolated broadcast outputs from Google Meet'))),
     status,
     h('div.mt-join-row', link, joinBtn),
     err,

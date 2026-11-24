@@ -57,6 +57,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: node scripts/test-osc.js
+      - run: node scripts/test-carryover.js
 
       - name: Build installer
         run: npm run dist
@@ -70,5 +71,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber
           else
-            gh release create "$TAG" "${files[@]}" --title "GMeet ISO $TAG" --generate-notes
+            gh release create "$TAG" "${files[@]}" --title "Google Meet ISO $TAG" --generate-notes
           fi

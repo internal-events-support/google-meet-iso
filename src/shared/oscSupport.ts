@@ -1,4 +1,4 @@
-// GENERATED from the ZoomISO v3 RE catalogue (allOscCommands.csv): GMeet ISO OSC support per command.
+// GENERATED from the ZoomISO v3 RE catalogue (allOscCommands.csv): Google Meet ISO OSC support per command.
 // Imported by the Settings Command Browser and by src/main/osc/router.ts. Edit notes here; keep `address` verbatim.
 
 export interface OscSupportEntry {
@@ -1533,7 +1533,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Enable Username Labels",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "disableUsernameLabels",
@@ -1542,7 +1542,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Disable Username Labels",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "enableOriginalSound",
@@ -1551,7 +1551,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Enable Original Sound",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "disableOriginalSound",
@@ -1560,7 +1560,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Disable Original Sound",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "enableMirrorVideo",
@@ -1569,7 +1569,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Enable Mirror Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "disableMirrorVideo",
@@ -1578,7 +1578,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Disable Mirror Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "enableHDVideo",
@@ -1587,7 +1587,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Enable HD Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "disableHDVideo",
@@ -1596,7 +1596,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Disable HD Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "joinMeeting",
@@ -2163,7 +2163,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Set Gallery View",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "setSpeakerView",
@@ -2181,7 +2181,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Show Non-Video Participants",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "hideNonVideoParticipants",
@@ -2190,7 +2190,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Hide Non-Video Participants",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "showUserNames",
@@ -2199,7 +2199,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Display Usernames on Videos",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "hideUserNames",
@@ -2208,7 +2208,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Hide Usernames on Videos",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "galleryPageNext",
@@ -2217,7 +2217,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Next Gallery Page",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "galleryPagePrev",
@@ -2226,7 +2226,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Previous Gallery Page",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "hideSelfView",
@@ -2235,7 +2235,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Hide Self View",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "showSelfView",
@@ -2244,7 +2244,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Show Self View",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "stopIncomingAudio",
@@ -2253,7 +2253,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Stop Incoming Audio",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "startIncomingAudio",
@@ -2262,7 +2262,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Start Incoming Audio",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "stopIncomingVideo",
@@ -2271,7 +2271,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Stop Incoming Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "startIncomingVideo",
@@ -2280,7 +2280,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Start Incoming Video",
     "syntax": "",
     "supported": false,
-    "note": "GMeet ISO captures feeds independently of the Meet client view."
+    "note": "Google Meet ISO captures feeds independently of the Meet client view."
   },
   {
     "address": "allowToSpeak",
@@ -2406,7 +2406,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Enables Talkback",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "disableTalkback",
@@ -2415,7 +2415,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Disable Talkback",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "getTalkbackStatus",
@@ -2424,7 +2424,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Request Talkback Enablement Status",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "talkbackStatus",
@@ -2433,7 +2433,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Talkback Enablement Status",
     "syntax": "{int status}",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "latchTalkbackChannel",
@@ -2442,7 +2442,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Latch Talkback Channel",
     "syntax": "{int channelIndex}",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "unLatchTalkbackChannel",
@@ -2451,7 +2451,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Un-Latch Talkback Channel",
     "syntax": "{int channelIndex}",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "getLatchTalkbackStatus",
@@ -2460,7 +2460,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Request All Talkback Channel Latch Status",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "latchTalkbackStatus",
@@ -2469,7 +2469,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "All Talkback Channels Latch Status",
     "syntax": "array of 0 (unlatched) or 1 (latched) corresponding to each talkback channel",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "setTalkbackChannelDucking",
@@ -2478,7 +2478,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Set Talkback Channel Ducking",
     "syntax": "{int channelIndex} {int level (0-100)}",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "getTalkbackChannelDucking",
@@ -2487,7 +2487,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Request All Talkback Channel Ducking",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "talkbackChannelDucking",
@@ -2496,7 +2496,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "All Talkback Channels Ducking",
     "syntax": "array of ints 0-100 corresponding to each talkback channel",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "getTalkbackChannelStatus",
@@ -2505,7 +2505,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Request Talkback Channel Status",
     "syntax": "",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   },
   {
     "address": "talkbackChannelStatus",
@@ -2514,7 +2514,7 @@ export const OSC_SUPPORT: OscSupportEntry[] = [
     "title": "Talkback Channel Status",
     "syntax": "{int channelIndex} {int numChannels} {int isRouted} {int isLatched} {int isDuckingNow} {int duckingLevel 0-100} {int hasParticipant} {str pID} {str userName} {int galleryIndex} {int zoomID}",
     "supported": false,
-    "note": "Talkback is not available in GMeet ISO."
+    "note": "Talkback is not available in Google Meet ISO."
   }
 ];
 

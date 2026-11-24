@@ -1,4 +1,4 @@
-// gmeet-iso native NDI sender addon (N-API, ABI-stable across Electron versions).
+// Google Meet ISO native NDI sender addon (N-API, ABI-stable across Electron versions).
 //
 // Design:
 //  - The NDI runtime is loaded dynamically (NDIlib_v6_load) from NDI_RUNTIME_DIR_V6,
@@ -649,7 +649,7 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
     rc.color_format = NDIlib_recv_color_format_BGRX_BGRA;
     rc.bandwidth = low ? NDIlib_recv_bandwidth_lowest : NDIlib_recv_bandwidth_highest;
     rc.allow_video_fields = false;
-    rc.p_ndi_recv_name = "GMeet ISO camera input";
+    rc.p_ndi_recv_name = "Google Meet ISO camera input";
     recv_ = g_ndi->recv_create_v3(&rc);
     if (!recv_) { Napi::Error::New(env, "NDI recv_create failed").ThrowAsJavaScriptException(); return; }
     running_ = true;

@@ -140,11 +140,11 @@ OSC: `/…/startRecording [out…]` and `/…/stopRecording [out…]` now map to
 
 ## 4. Main process / API
 - **Application menu** (RE 07, adapted for Windows):
-  - **GMeet ISO:** About, Settings… (Ctrl+,), Sign in with embedded browser, Sign Out, Quit (Ctrl+Q)
+  - **Google Meet ISO:** About, Settings… (Ctrl+,), Sign in with embedded browser, Sign Out, Quit (Ctrl+Q)
   - **File:** Export Configuration (Ctrl+S) → `saveShow`; Load Configuration (Ctrl+O) → `loadShow`; Clear Cache (app will close)
   - **Edit:** standard roles
   - **Window:** Minimize, Zoom, Show Logging (opens Settings with `arg=logs`)
-  - **Help:** GMeet ISO Help (F1); Check for Updates (disabled)
+  - **Help:** Google Meet ISO Help (F1); Check for Updates (disabled)
 
   The control window keeps the menu attached but hidden, so the accelerators work. The UI can show it with
   **`gmeetIso.popupAppMenu(x?, y?)`** (new `ControlApi` method, IPC `ctl:popupAppMenu`), e.g. from a top-bar button.

@@ -121,7 +121,7 @@ export function installMediaShim(): void {
     ids.push(t.id);
     root()?.setAttribute('data-gmeet-iso-cam-tracks', ids.join(','));
     // Make the track look like a camera to Meet.
-    Object.defineProperty(t, 'label', { value: 'GMeet ISO Camera' });
+    Object.defineProperty(t, 'label', { value: 'Google Meet ISO Camera' });
     const origSettings = t.getSettings.bind(t);
     t.getSettings = () => ({ ...origSettings(), deviceId: CAM_ID, width: 1280, height: 720, frameRate: 30 });
     return t;
@@ -170,7 +170,7 @@ export function installMediaShim(): void {
     if (ac.state === 'suspended') void ac.resume();
     await applyMic();
     const t = dest!.stream.getAudioTracks()[0].clone();
-    Object.defineProperty(t, 'label', { value: 'GMeet ISO Mic' });
+    Object.defineProperty(t, 'label', { value: 'Google Meet ISO Mic' });
     const origSettings = t.getSettings.bind(t);
     t.getSettings = () => ({ ...origSettings(), deviceId: MIC_ID });
     return t;
@@ -229,8 +229,8 @@ export function installMediaShim(): void {
         getCapabilities: () => ({}),
       }) as unknown as MediaDeviceInfo;
     return [
-      fake(CAM_ID, 'videoinput', 'GMeet ISO Camera'),
-      fake(MIC_ID, 'audioinput', 'GMeet ISO Mic'),
+      fake(CAM_ID, 'videoinput', 'Google Meet ISO Camera'),
+      fake(MIC_ID, 'audioinput', 'Google Meet ISO Mic'),
       ...real.filter((d) => d.kind === 'audiooutput'),
     ];
   };

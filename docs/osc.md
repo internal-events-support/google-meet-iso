@@ -1,6 +1,6 @@
 # OSC and HTTP/WS control (ZoomOSC / ZoomISO v3 compatible)
 
-GMeet ISO implements the ZoomISO v3 OSC catalogue (`RE/data/allOscCommands.csv`, 278 rows) wherever Google Meet allows it.
+Google Meet ISO implements the ZoomISO v3 OSC catalogue (`RE/data/allOscCommands.csv`, 278 rows) wherever Google Meet allows it.
 **Coverage: 83/278 catalogue rows supported** (54/206 incoming commands, 29/72 outputs/responses).
 The machine-readable list is `src/shared/oscSupport.ts` (`OSC_SUPPORT`, `OSC_SUPPORTED`, `oscSupportFor()`), which the Settings Command Browser imports. It's also served at `GET /api/osc/support`.
 
@@ -409,18 +409,18 @@ Events come from diffing every Meet state push (about 2/s). `/zoom/subscribe <in
 | `listFilters` | Incoming Command | ⛔ | Meet backgrounds/filters are not automated. |
 | `setFilter` | Incoming Command | ⛔ | Meet backgrounds/filters are not automated. |
 | `getFilter` | Incoming Command | ⛔ | Meet backgrounds/filters are not automated. |
-| `enableUsernameLabels` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `disableUsernameLabels` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `enableOriginalSound` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `disableOriginalSound` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `enableMirrorVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `disableMirrorVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `enableHDVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `disableHDVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `showNonVideoParticipants` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `hideNonVideoParticipants` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `showUserNames` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `hideUserNames` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
+| `enableUsernameLabels` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `disableUsernameLabels` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `enableOriginalSound` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `disableOriginalSound` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `enableMirrorVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `disableMirrorVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `enableHDVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `disableHDVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `showNonVideoParticipants` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `hideNonVideoParticipants` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `showUserNames` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `hideUserNames` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
 
 ### Settings Response
 
@@ -457,19 +457,19 @@ Events come from diffing every Meet state push (about 2/s). `/zoom/subscribe <in
 
 | Message | Type | Supported | Note |
 |---|---|---|---|
-| `enableTalkback` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `disableTalkback` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `getTalkbackStatus` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `talkbackStatus` | Response to incoming message | ⛔ | Talkback is not available in GMeet ISO. |
-| `latchTalkbackChannel` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `unLatchTalkbackChannel` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `getLatchTalkbackStatus` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `latchTalkbackStatus` | Response to incoming message | ⛔ | Talkback is not available in GMeet ISO. |
-| `setTalkbackChannelDucking` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `getTalkbackChannelDucking` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `talkbackChannelDucking` | Response to incoming message | ⛔ | Talkback is not available in GMeet ISO. |
-| `getTalkbackChannelStatus` | Incoming Command | ⛔ | Talkback is not available in GMeet ISO. |
-| `talkbackChannelStatus` | Response to incoming message | ⛔ | Talkback is not available in GMeet ISO. |
+| `enableTalkback` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `disableTalkback` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `getTalkbackStatus` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `talkbackStatus` | Response to incoming message | ⛔ | Talkback is not available in Google Meet ISO. |
+| `latchTalkbackChannel` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `unLatchTalkbackChannel` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `getLatchTalkbackStatus` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `latchTalkbackStatus` | Response to incoming message | ⛔ | Talkback is not available in Google Meet ISO. |
+| `setTalkbackChannelDucking` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `getTalkbackChannelDucking` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `talkbackChannelDucking` | Response to incoming message | ⛔ | Talkback is not available in Google Meet ISO. |
+| `getTalkbackChannelStatus` | Incoming Command | ⛔ | Talkback is not available in Google Meet ISO. |
+| `talkbackChannelStatus` | Response to incoming message | ⛔ | Talkback is not available in Google Meet ISO. |
 
 ### User Info
 
@@ -512,12 +512,12 @@ Events come from diffing every Meet state push (about 2/s). `/zoom/subscribe <in
 | Message | Type | Supported | Note |
 |---|---|---|---|
 | `outputISO` | Incoming User Command | ✅ |  |
-| `setGalleryView` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
+| `setGalleryView` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
 | `setSpeakerView` | Incoming Command | ⛔ | Bot devices are chosen in Settings, not via OSC. |
-| `stopIncomingAudio` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `startIncomingAudio` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `stopIncomingVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `startIncomingVideo` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
+| `stopIncomingAudio` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `startIncomingAudio` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `stopIncomingVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `startIncomingVideo` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
 | `allowToSpeak` | Incoming User Command | ⛔ | No webinar roles. |
 | `disallowToSpeak` | Incoming User Command | ⛔ | No webinar roles. |
 | `enableUsersUnmute` | Incoming Command | ⛔ | Not automated. |
@@ -542,10 +542,10 @@ Events come from diffing every Meet state push (about 2/s). `/zoom/subscribe <in
 
 | Message | Type | Supported | Note |
 |---|---|---|---|
-| `galleryPageNext` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `galleryPagePrev` | Incoming Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `hideSelfView` | Incoming User Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
-| `showSelfView` | Incoming User Command | ⛔ | GMeet ISO captures feeds independently of the Meet client view. |
+| `galleryPageNext` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `galleryPagePrev` | Incoming Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `hideSelfView` | Incoming User Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
+| `showSelfView` | Incoming User Command | ⛔ | Google Meet ISO captures feeds independently of the Meet client view. |
 
 ### Waiting Rooms and ZAK Join
 

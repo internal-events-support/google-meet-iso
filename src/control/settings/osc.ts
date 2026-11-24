@@ -66,19 +66,19 @@ function oscSettings(): HTMLElement {
   return section('OSC settings', [
     row('Enable OSC', tog(o.enabled, (v) => void patchGroup('osc', { enabled: v })), { title: 'When enabled, the application will listen for incoming commands and transmit outgoing commands' }),
     row('Transmission IP', field(o.host, (v) => void patchGroup('osc', { host: v.trim() }), { cls: 'wide right' }), {
-      info: 'The IP address where GMeet ISO will send outgoing commands',
+      info: 'The IP address where Google Meet ISO will send outgoing commands',
     }),
     row('Transmission port', numField(o.txPort, (v) => void patchGroup('osc', { txPort: v }), { min: 1, max: 65535, cls: 'wide right' }), {
-      title: 'The network port where GMeet ISO will send outgoing commands',
+      title: 'The network port where Google Meet ISO will send outgoing commands',
     }),
     row('Receiving port', numField(o.rxPort, (v) => void patchGroup('osc', { rxPort: v }), { min: 1, max: 65535, cls: 'wide right' }), {
-      title: 'The network port where GMeet ISO will listen for incoming messages',
+      title: 'The network port where Google Meet ISO will listen for incoming messages',
     }),
     row('Listen to interface', pick(ifaces, o.interface, (v) => void patchGroup('osc', { interface: v })), {
       title: 'Select the network interface to use for incoming commands, or "All" for all interfaces.',
     }),
     row('OSC control allow list', [h('span.s-dim', listInfo), tog(o.enableAllowList, (v) => void patchGroup('osc', { enableAllowList: v }))], {
-      title: 'Restrict which devices are allowed to send OSC commands to GMeet ISO via a list of IP addresses. GMeet ISO will only allow control from these IPs on the selected interface(s).',
+      title: 'Restrict which devices are allowed to send OSC commands to Google Meet ISO via a list of IP addresses. Google Meet ISO will only allow control from these IPs on the selected interface(s).',
     }),
     row(
       'Upload OSC allow list',
@@ -93,9 +93,9 @@ function oscSettings(): HTMLElement {
       ],
       { title: 'Configure a .txt file containing the IP addresses to use for the Allow List, one per-line.' },
     ),
-    row('OSC baud rate', pick(OSC_BAUD_RATE_OPTIONS, o.baudRate, (v) => void patchGroup('osc', { baudRate: v })), { title: 'The maximum speed GMeet ISO will transmit OSC messages' }),
+    row('OSC baud rate', pick(OSC_BAUD_RATE_OPTIONS, o.baudRate, (v) => void patchGroup('osc', { baudRate: v })), { title: 'The maximum speed Google Meet ISO will transmit OSC messages' }),
     row('OSC address header', field(o.prepend, (v) => void patchGroup('osc', { prepend: v.trim() ? '/' + v.trim().replace(/^\/+/, '') : '' }), { placeholder: '/gmeetosc', cls: 'wide right' }), {
-      title: "Customize the prefix string on GMeet ISO's OSC outputs to differentiate between devices sending to the same receiver",
+      title: "Customize the prefix string on Google Meet ISO's OSC outputs to differentiate between devices sending to the same receiver",
     }),
     row('Subscribe to', pick(OSC_SUBSCRIBE_MODE_OPTIONS, o.subscribeMode, (v) => void patchGroup('osc', { subscribeMode: v })), {
       title: 'Determine which group of participants to monitor for sending out OSC events',
@@ -112,7 +112,7 @@ type GroupName = 'Global Commands' | 'User Commands' | 'Outputs';
 const GROUP_INFO: Record<GroupName, string> = {
   'Global Commands': 'Commands that control the meeting or application without a target.',
   'User Commands': 'Commands that act on a participant or group target.',
-  Outputs: 'Messages emitted by GMeet ISO, including command responses.',
+  Outputs: 'Messages emitted by Google Meet ISO, including command responses.',
 };
 
 interface Cmd {
@@ -141,11 +141,11 @@ const CMDS: Cmd[] = OSC_CATALOG.map((r, idx) => {
     supported: !!sup?.supported,
     note: sup?.note ?? '',
     pro: pro === 'Pro',
-    category: (category || 'Other').replace(/ZoomISO/g, 'GMeet ISO').replace(/ZoomOSC/g, 'GMeet ISO'),
+    category: (category || 'Other').replace(/ZoomISO/g, 'Google Meet ISO').replace(/ZoomOSC/g, 'Google Meet ISO'),
   };
-}).filter((c) => c.supported); // Only commands GMeet ISO actually handles are listed.
+}).filter((c) => c.supported); // Only commands Google Meet ISO actually handles are listed.
 
-const meetify = (s: string) => s.replace(/ZoomOSC\/ISO/g, 'GMeet ISO').replace(/ZoomOSC|ZoomISO/g, 'GMeet ISO').replace(/\bZoom\b/g, 'Google Meet');
+const meetify = (s: string) => s.replace(/ZoomOSC\/ISO/g, 'Google Meet ISO').replace(/ZoomOSC|ZoomISO/g, 'Google Meet ISO').replace(/\bZoom\b/g, 'Google Meet');
 
 type SimTarget = 'userName' | 'galIndex' | 'targetID';
 const SIM_OPTS: OptionItem<SimTarget>[] = [
@@ -224,7 +224,7 @@ function commandBrowser(): { el: HTMLElement; dispose(): void } {
       copy.classList.add('done');
       setTimeout(() => copy.classList.remove('done'), 900);
     });
-    // Related commands: only those GMeet ISO supports (and so are listed) become links.
+    // Related commands: only those Google Meet ISO supports (and so are listed) become links.
     const link = (label: string, names: string) => {
       const targets = names.split(/[,;\s]+/).filter(Boolean).map((n) => CMDS.find((x) => x.msg === n && x.idx !== c.idx)).filter((t): t is Cmd => !!t);
       if (!targets.length) return null;

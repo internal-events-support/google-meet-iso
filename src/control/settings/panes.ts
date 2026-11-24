@@ -149,8 +149,8 @@ export function inMeetingPane(): HTMLElement {
       }),
       row('Gallery tile count', numField(s.maxTiles, (v) => void setSettings({ maxTiles: v }), { min: 6, max: 49 })),
       row('Join automatically', tog(s.autoJoin, (v) => void setSettings({ autoJoin: v })), { info: 'Click "Join now" / "Ask to join" automatically.' }),
-      row('Admit everyone who asks to join', tog(s.autoAdmit, (v) => void setSettings({ autoAdmit: v })), { info: 'Requires GMeet ISO to be a host or co-host.' }),
-      row('Join notice', field(s.joinNotice, (v) => void setSettings({ joinNotice: v }), { placeholder: 'Off', cls: 'wide' }), { info: 'Chat message posted when GMeet ISO joins. Leave empty to turn off.' }),
+      row('Admit everyone who asks to join', tog(s.autoAdmit, (v) => void setSettings({ autoAdmit: v })), { info: 'Requires Google Meet ISO to be a host or co-host.' }),
+      row('Join notice', field(s.joinNotice, (v) => void setSettings({ joinNotice: v }), { placeholder: 'Off', cls: 'wide' }), { info: 'Chat message posted when Google Meet ISO joins. Leave empty to turn off.' }),
     ]),
   );
 }
@@ -224,7 +224,7 @@ export function videoLossPane(): HTMLElement {
   const rows: HTMLElement[] = [
     h('div.s-row.s-preview-row', preview),
     row('Video loss delay time', seg(VIDEO_LOSS_DELAY_OPTIONS, VIDEO_LOSS_DELAY_OPTIONS[Math.max(0, delayIdx)].value, (d) => void patchGroup('videoLoss', { delay: d })), {
-      info: 'How long GMeet ISO waits for live video to return before switching to the Video Loss Mode content. Skipped when video stops for a known reason, such as a participant turning off their camera or leaving.',
+      info: 'How long Google Meet ISO waits for live video to return before switching to the Video Loss Mode content. Skipped when video stops for a known reason, such as a participant turning off their camera or leaving.',
     }),
     row('Per-output video loss settings', tog(g.perOutputVideoLossEnabled, (on) => void patchGroup('videoLoss', { perOutputVideoLossEnabled: on }))),
   ];

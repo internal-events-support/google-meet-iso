@@ -1,5 +1,5 @@
 {
-  "name": "gmeet-iso",
+  "name": "google-meet-iso",
   "version": "1.0.4",
   "description": "Zoom-ISO-style per-participant NDI feeds for Google Meet",
   "main": "dist/main/main.js",
@@ -34,11 +34,12 @@
     "ws": "^8.23.0"
   },
   "private": true,
-  "productName": "GMeet ISO",
-  "author": "GMeet ISO",
+  "productName": "Google Meet ISO",
+  "author": "nerif-tafu",
   "build": {
-    "appId": "com.gmeetiso.app",
-    "productName": "GMeet ISO",
+    "appId": "com.nerif-tafu.google-meet-iso",
+    "productName": "Google Meet ISO",
+    "copyright": "Copyright © 2026 nerif-tafu",
     "npmRebuild": false,
     "directories": {
       "output": "release"
@@ -71,8 +72,10 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "guid": "3ef04187-cea3-5e11-9c21-aff9b6336351",
+      "include": "installer/installer.nsh"
     },
-    "artifactName": "GMeet-ISO-${version}-${os}-${arch}.${ext}"
+    "artifactName": "Google-Meet-ISO-${version}-${os}-${arch}.${ext}"
   }
 }

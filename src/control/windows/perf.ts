@@ -363,9 +363,9 @@ const SYS_FMT: Record<SysMetric, (v: number) => string> = {
   networkIn: (v) => `${v.toFixed(1)} Mbps`,
 };
 const SYS_NA: Partial<Record<SysMetric, string>> = {
-  gpu: 'GPU usage is not exposed to GMeet ISO on Windows',
-  diskWrite: 'Disk write rate is not measured by GMeet ISO',
-  networkOut: 'Outgoing network rate is not measured by GMeet ISO',
+  gpu: 'GPU usage is not exposed to Google Meet ISO on Windows',
+  diskWrite: 'Disk write rate is not measured by Google Meet ISO',
+  networkOut: 'Outgoing network rate is not measured by Google Meet ISO',
 };
 
 let sysBuilt: { el: HTMLElement; refresh: () => void } | null = null;
@@ -444,7 +444,7 @@ function exportCsv(): void {
     }
     lines.push(row.join(','));
   }
-  const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })), download: `GMeet ISO Performance ${clock24(Date.now()).replace(/:/g, '-')}.csv` }) as HTMLAnchorElement;
+  const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })), download: `Google Meet ISO Performance ${clock24(Date.now()).replace(/:/g, '-')}.csv` }) as HTMLAnchorElement;
   document.body.append(a);
   a.click();
   a.remove();

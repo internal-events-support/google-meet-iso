@@ -672,7 +672,7 @@ export interface Settings {
   /** NDI network: discovery server ("host:port", '' = mDNS) and NIC IPs (comma separated). */
   ndiDiscoveryServer: string;
   ndiNicIps: string;
-  /** Recording folder; '' = Videos/GMeet ISO. */
+  /** Recording folder; '' = Videos/Google Meet ISO. */
   recordDir: string;
   /** Settings window: start the output engine (enabled) when the bot enters a call. */
   autoStartEngine: boolean;
@@ -958,7 +958,7 @@ export interface ControlApi {
   openPath(kind: 'recordings' | 'logs' | 'userData'): Promise<void>;
   /** Show/hide the (normally hidden) Meet window for troubleshooting. */
   setMeetWindowVisible(visible: boolean): Promise<boolean>;
-  /** Pop up the application menu (GMeet ISO / File / Edit / Window / Help) at window coords. */
+  /** Pop up the application menu (Google Meet ISO / File / Edit / Window / Help) at window coords. */
   popupAppMenu(x?: number, y?: number): Promise<void>;
 }
 

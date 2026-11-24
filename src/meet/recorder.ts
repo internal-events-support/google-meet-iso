@@ -32,7 +32,7 @@ try {
 }
 
 export function defaultRecordDir(): string {
-  return path.join(os.homedir(), 'Videos', 'GMeet ISO');
+  return path.join(os.homedir(), 'Videos', 'Google Meet ISO');
 }
 
 /** RE RecordingSettings.generateFileName: prefix · output name · suffix · date. */
@@ -79,7 +79,7 @@ export class Recorder {
     private withAudio: boolean,
   ) {
     this.cfg = { ...recSettings };
-    if (this.cfg.format !== 'mp4') this.log(`[rec ${name}] ${this.cfg.format.toUpperCase()} isn't available in GMeet ISO; recording MP4`);
+    if (this.cfg.format !== 'mp4') this.log(`[rec ${name}] ${this.cfg.format.toUpperCase()} isn't available in Google Meet ISO; recording MP4`);
     this.codec = this.cfg.videoCodec === 'hevc' ? 'hevc' : 'h264';
     if (this.cfg.videoCodec === 'proRes422LT') this.log(`[rec ${name}] ProRes isn't available on Windows; recording H.264`);
     const folder = dir || defaultRecordDir();

@@ -1,4 +1,4 @@
-# ZoomISO v3 RE → GMeet ISO port spec
+# ZoomISO v3 RE → Google Meet ISO port spec
 
 Every subagent reads this first. It maps the reverse-engineered ZoomISO v3.0.7 app onto this Electron/Google Meet project.
 
@@ -25,7 +25,7 @@ Every subagent reads this first. It maps the reverse-engineered ZoomISO v3.0.7 a
 - `static/*.html` + `static/css/*.css` (`tokens.css` = design tokens).
 - Build/check: `npm run typecheck && npm run build:ui`. The app reloads its UI windows from `dist/ui`. Main-process changes need a restart; the user restarts it, so don't kill the running Electron (it's in a live Meet call).
 
-## Mapping (ZoomISO → GMeet ISO)
+## Mapping (ZoomISO → Google Meet ISO)
 | ZoomISO | Ours | Feasibility |
 |---|---|---|
 | `ZISOStream` (output) | `OutputConfig` | ✅ Add RE fields: `isAutoAssign`, `useDefaultAudioMode`, `customImageOverlays` (+rotation, zIndex), `nameTagZIndex`, `overlayNameMode`, per-output `videoLoss`, `autoCrop*` |
