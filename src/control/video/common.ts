@@ -29,7 +29,7 @@ export function selectionModel(cfg: OutputConfig, st: OutputState | undefined): 
     const kind = cfg.mode === 'participant' ? 'camera' : 'screen';
     const list = roster(kind);
     const opts: { value: string; label: string; disabled?: boolean }[] = [
-      { value: '', label: kind === 'camera' ? '--' : 'Any Screen Share' },
+      { value: '', label: kind === 'camera' ? '--' : 'Any screen share' },
     ];
     for (const p of list) opts.push({ value: p.key, label: kind === 'screen' ? p.displayName.replace(/\s*\(presentation\)$/i, '') : p.displayName });
     let value = '';
@@ -172,7 +172,7 @@ export async function duplicateOutput(cfg: OutputConfig): Promise<void> {
 }
 
 export async function renameOutput(cfg: OutputConfig): Promise<void> {
-  const v = await promptSheet('Rename Output', cfg.name, 'Rename');
+  const v = await promptSheet('Rename output', cfg.name, 'Rename');
   const name = v?.trim();
   if (name && name !== cfg.name) await updateOutput(cfg.id, { name });
 }
@@ -189,7 +189,7 @@ export function outputMenu(anchor: HTMLElement, getCfg: () => OutputConfig | und
   menu(anchor, [
     { label: 'Duplicate', icon: 'copy', onClick: () => void duplicateOutput(cfg) },
     { label: 'Rename', icon: 'pencil', onClick: () => void renameOutput(cfg) },
-    { label: 'Output Effects', icon: 'sliders', onClick: () => openEffects(cfg.id) },
+    { label: 'Output effects', icon: 'sliders', onClick: () => openEffects(cfg.id) },
     null,
     { label: 'Delete output', icon: 'trash', destructive: true, onClick: () => void deleteOutput(cfg) },
   ]);

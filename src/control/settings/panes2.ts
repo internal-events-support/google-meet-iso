@@ -107,7 +107,7 @@ export function recordingPane(): HTMLElement {
       h('div.s-row.s-fname', h('div', h('div.s-cap', 'Preview:'), h('div.s-mono', previewName))),
     ]),
     section('Recording format', [
-      row('Container Format', pick(RECORDING_FORMAT_OPTIONS, r.format, (v) => void patchGroup('recording', { format: v }))),
+      row('Container format', pick(RECORDING_FORMAT_OPTIONS, r.format, (v) => void patchGroup('recording', { format: v }))),
       row('Video codec', pick(RECORDING_CODEC_OPTIONS, r.videoCodec, (v) => void patchGroup('recording', { videoCodec: v }))),
       row('Video bitrate', numField(r.videoBitrateMbps, (v) => void patchGroup('recording', { videoBitrateMbps: v }), { min: 1, max: 200, suffix: 'Mbps' })),
     ]),
@@ -175,13 +175,13 @@ export function logsPane(fixedGroup?: 'OSC'): { el: HTMLElement; dispose(): void
   };
   const bar = h(
     'div.s-log-bar',
-    h('span.s-cap', 'Logging Level'),
+    h('span.s-cap', 'Logging level'),
     pick(levelOpts, store.settings.logLevel, (v) => void setSettings({ logLevel: v as Level })),
     fixedGroup
       ? null
       : h(
           'span.s-log-group',
-          h('span.s-cap', 'Log Group'),
+          h('span.s-cap', 'Log group'),
           seg(
             [
               { value: 'all', label: 'All' },
@@ -198,10 +198,10 @@ export function logsPane(fixedGroup?: 'OSC'): { el: HTMLElement; dispose(): void
         ),
     h('label.s-check', scrollCb, 'Scroll to latest'),
     h('span.s-spacer'),
-    sbtn('Save Logs...', save),
+    sbtn('Save logs…', save),
     info('Saves verbose-level logs for application and OSC'),
     h('span.s-spacer'),
-    sbtn('Clear Log', () => {
+    sbtn('Clear log', () => {
       clearedAt = store.log.length;
       render();
     }),

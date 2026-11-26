@@ -24,7 +24,7 @@ import {
 } from '../shared/types';
 import { AudioRouter } from './audio';
 import { OutputDeviceRouter } from './audioRouting'; // [audio-agent]
-import { BotCamera, getCamCanvas, Thumbnailer } from './camsource';
+import { BotCamera, getCamCanvas } from './camsource';
 import {
   accountName,
   admitWaiting,
@@ -62,6 +62,7 @@ import {
 } from './dom';
 import { installMediaShim } from './inject';
 import type { NativeNdi } from './native';
+import { EngineClient } from './engineclient';
 import { OutputPipeline } from './outputs';
 import { defaultRecordDir } from './recorder';
 import { SourceTap } from './sources';
@@ -102,11 +103,58 @@ let settings: Settings = { ...DEFAULT_SETTINGS };
 let ndiState: MeetState['ndi'] = { ok: false, error: 'not loaded' };
 let ndi: NativeNdi | null = null;
 let botCam: BotCamera | null = null;
-const botThumb = new Thumbnailer(320);
+/** Bot camera preview: last canvas paint sent, and whether a grab is in flight. */
+const botThumb = { paints: -1, busy: false, last: 0 };
+
+/**
+ * Return Feed preview of the bot camera. Only when the canvas changed, at most previewFps; the
+ * downscale runs GPU-side (createImageBitmap) and the JPEG is encoded in the render worker, so
+ * this thread never waits on a GPU readback.
+ */
+function botCamPreview(): void {
+  const now = performance.now();
+  if (!engine || !botCam || botThumb.busy || botThumb.paints === botCam.paints || now - botThumb.last < 1000 / Math.max(1, settings.previewFps)) return;
+  if (!wantsPreview(BOT_CAM_KEY)) return;
+  const c = getCamCanvas();
+  botThumb.busy = true;
+  botThumb.last = now;
+  botThumb.paints = botCam.paints;
+  createImageBitmap(c, { resizeWidth: 320, resizeHeight: Math.round((320 * c.height) / c.width), resizeQuality: 'low' })
+    .then((bitmap) => engine?.send({ t: 'thumbImage', key: BOT_CAM_KEY, bitmap }, [bitmap]))
+    .catch(() => {})
+    .finally(() => (botThumb.busy = false));
+}
 const sources = new Map<string, SourceTap>();
 const outputs = new Map<string, OutputPipeline>();
 const speaker = new SpeakerTracker();
 let router: AudioRouter | null = null;
+/** The video engine (render worker, or in-page fallback): created on DOMContentLoaded. */
+let engine: EngineClient | null = null;
+/** WebGPU devices / WebGL contexts lost in the engine so far (bench diagnostics). */
+let engineGpuLost = 0;
+
+function startEngine(): EngineClient {
+  return new EngineClient({
+    frame: (m) => {
+      const p = outputs.get(m.id);
+      if (p) p.submit(m.buf, m.w, m.h, m.fmt, m.stride, m.fpsN, m.fpsD);
+    },
+    cadence: (id, on) => outputs.get(id)?.setPassCadence(on),
+    preview: (key, jpeg) => sendPreview(key, jpeg),
+    rec: (id, frame, w, h) => {
+      const p = outputs.get(id);
+      if (p) p.record(frame, w, h);
+      else frame.close();
+    },
+    stats: (outs, srcs, gpuLost) => {
+      engineGpuLost = gpuLost;
+      for (const [id, p] of outputs) p.setStats(outs[id]);
+      for (const [key, s] of sources) s.setStats(srcs[key]);
+    },
+    trackEnd: (id) => sources.get(id)?.readEnded(),
+    log,
+  });
+}
 let deviceRouter: OutputDeviceRouter | null = null; // [audio-agent]
 
 // ---------------------------------------------------------------------------
@@ -161,6 +209,12 @@ const meetingOnce = { path: '', layout: '', notice: false, noticeTries: 0, notic
 // ---------------------------------------------------------------------------
 // sources
 // ---------------------------------------------------------------------------
+/** Preview keys some visible UI element shows (null until main tells us: then everything). */
+let previewKeys: Set<string> | null = null;
+function wantsPreview(key: string): boolean {
+  return !previewKeys || previewKeys.has(key);
+}
+
 function sendPreview(key: string, jpeg: ArrayBuffer): void {
   ipcRenderer.send(IPC.meetPreview, key, new Uint8Array(jpeg));
 }
@@ -175,12 +229,8 @@ function syncSources(live: boolean): void {
       seen.add(t.key);
       let src = sources.get(t.key);
       if (!src) {
-        src = new SourceTap(
-          { key: t.key, participantId: t.participantId, kind: t.isScreen ? 'screen' : 'camera', displayName: t.displayName },
-          log,
-          sendPreview,
-          () => 2,
-        );
+        if (!engine) continue;
+        src = new SourceTap({ key: t.key, participantId: t.participantId, kind: t.isScreen ? 'screen' : 'camera', displayName: t.displayName }, log, engine);
         sources.set(t.key, src);
       }
       if (t.hasName && !src.hasName) log(`Participant: ${t.displayName}${t.isScreen ? ' [screen]' : ''}${t.isSelf ? ' (bot)' : ''}`);
@@ -224,7 +274,7 @@ function findSourceFor(sel: { key: string; name: string } | null, kind?: 'camera
 // outputs
 // ---------------------------------------------------------------------------
 function syncOutputs(): void {
-  if (!ndi) return;
+  if (!ndi || !engine) return;
   const wanted = new Set(settings.outputs.map((o) => o.id));
   for (const [id, p] of outputs) {
     if (!wanted.has(id)) {
@@ -241,7 +291,7 @@ function syncOutputs(): void {
         previewFps: () => settings.previewFps,
         recordDir: () => settings.recordDir || defaultRecordDir(),
         log,
-        onPreview: sendPreview,
+        engine,
         videoLoss: () => settings.videoLoss, // [effects-agent] loss delay + profile picture style
       });
       outputs.set(cfg.id, p);
@@ -530,6 +580,26 @@ function rosterOnly(): ParticipantState[] {
 }
 // [/participants-agent]
 
+/** Benchmark mode: lateness of a 10 ms timer = how long the page's main thread was blocked. */
+const benchLag = process.env.GMEET_ISO_BENCH
+  ? (() => {
+      const lags: number[] = [];
+      let due = performance.now() + 10;
+      window.setInterval(() => {
+        const now = performance.now();
+        lags.push(Math.max(0, now - due));
+        if (lags.length > 200) lags.shift();
+        due = now + 10;
+      }, 10);
+      return {
+        stats: () => {
+          const s = [...lags].sort((a, b) => a - b);
+          return { lagP95: s[Math.floor(s.length * 0.95)] ?? 0, lagMax: s[s.length - 1] ?? 0 };
+        },
+      };
+    })()
+  : null;
+
 function report(): void {
   const { phase, detail } = meetingPhase();
   if (phase === 'in-call' && !inCallSince) inCallSince = Date.now();
@@ -563,6 +633,7 @@ function report(): void {
     mixLevel: router?.mixPeak ?? 0,
     audioOutputMeters: deviceRouter?.meters(), // [audio-agent]
     audioOutputChannels: deviceRouter?.channelCounts(), // [audio-agent]
+    bench: benchLag ? { ...benchLag.stats(), glContextsLost: engineGpuLost } : undefined,
     updatedAt: Date.now(),
   };
   ipcRenderer.send(IPC.meetState, state);
@@ -649,6 +720,8 @@ function disposeAll(): void {
   outputs.clear();
   for (const s of sources.values()) s.dispose();
   sources.clear();
+  engine?.dispose();
+  engine = null;
   router?.dispose();
   deviceRouter?.dispose(); // [audio-agent]
   botCam?.dispose();
@@ -677,6 +750,10 @@ if (isMeet) {
     }
     ipcRenderer.send(IPC.meetCommand, id, result);
   });
+  ipcRenderer.on(IPC.meetPreviewKeys, (_e, keys: string[]) => {
+    previewKeys = new Set(keys);
+    engine?.send({ t: 'previewKeys', keys }); // the engine re-renders newly shown static outputs
+  });
   ipcRenderer.on(IPC.meetSetCam, (_e, on: boolean) => setDevice('camera', on));
   ipcRenderer.on(IPC.meetSetMic, (_e, on: boolean) => setDevice('microphone', on));
   ipcRenderer.on(IPC.meetLeave, () => {
@@ -699,6 +776,8 @@ if (isMeet) {
 
   window.addEventListener('DOMContentLoaded', () => {
     getCamCanvas();
+    engine = startEngine();
+    if (previewKeys) engine.send({ t: 'previewKeys', keys: [...previewKeys] });
     botCam = new BotCamera(ndi?.Receiver ?? null, log);
     router = new AudioRouter(onAudio, log);
     deviceRouter = new OutputDeviceRouter(log); // [audio-agent]
@@ -710,10 +789,7 @@ if (isMeet) {
       tick().catch((e) => log(`tick error: ${(e as Error).message}`));
     }, 400);
     window.setInterval(report, 500);
-    window.setInterval(() => {
-      const c = getCamCanvas();
-      void botThumb.maybe(c, c.width, c.height, settings.previewFps).then((j) => j && sendPreview(BOT_CAM_KEY, j));
-    }, 1000 / 15);
+    window.setInterval(botCamPreview, 1000 / 15);
     void reportDevices();
     navigator.mediaDevices.addEventListener('devicechange', () => void reportDevices());
   });

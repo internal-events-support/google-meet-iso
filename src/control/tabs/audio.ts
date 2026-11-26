@@ -22,8 +22,8 @@ const MODE_OPTIONS: { value: AudioChannelMode; label: string }[] = [
   { value: 'mixAll', label: 'Mix' },
   { value: 'mixOutputs', label: 'Mix of all outputs' },
   { value: 'mixUnassigned', label: 'Mix of all unassigned participants' },
-  { value: 'screenshare', label: 'Active Share' },
-  { value: 'activeSpeaker', label: 'Unique Speaker' },
+  { value: 'screenshare', label: 'Active share' },
+  { value: 'activeSpeaker', label: 'Unique speaker' },
 ];
 const PAN_OPTIONS: { value: AudioPan; label: string }[] = [
   { value: 'both', label: 'Mono' },
@@ -112,9 +112,9 @@ function meter(get: () => number): HTMLElement {
 // toolbar
 // ---------------------------------------------------------------------------
 function renderToolbar(el: HTMLElement, render: () => void): void {
-  const add = button(h('span.bl', icon('plus'), 'Update Output Devices'), openDeviceSheet);
-  const collapse = button(h('span.bl', icon('chevronDown', 'flip'), 'Collapse All'), () => void setAllCollapsed(true, render));
-  const expand = button(h('span.bl', icon('chevronDown'), 'Expand All'), () => void setAllCollapsed(false, render));
+  const add = button(h('span.bl', icon('plus'), 'Update output devices'), openDeviceSheet);
+  const collapse = button(h('span.bl', icon('chevronDown', 'flip'), 'Collapse all'), () => void setAllCollapsed(true, render));
+  const expand = button(h('span.bl', icon('chevronDown'), 'Expand all'), () => void setAllCollapsed(false, render));
   el.replaceChildren(h('div.l', add), h('div.r', collapse, expand));
 }
 
@@ -200,7 +200,7 @@ function patchDevice(label: string, patch: Partial<AudioOutputDeviceConfig>): Pr
 // Outputs view (AudioOutputsView)
 // ---------------------------------------------------------------------------
 function colHeader(): HTMLElement {
-  return h('div.au-row.au-cols', ...['Channel', 'Mode', 'Selection', 'Pan', 'Gain Reduction', 'Delay', '', 'Meters'].map((t) => h('div', t)));
+  return h('div.au-row.au-cols', ...['Channel', 'Mode', 'Selection', 'Pan', 'Gain reduction', 'Delay', '', 'Meters'].map((t) => h('div', t)));
 }
 
 function sectionHeader(title: string, sub: string, collapsed: boolean, onToggle: () => void, right: Node[] = []): HTMLElement {
@@ -259,7 +259,7 @@ function embeddedTable(o: OutputConfig, render: () => void): HTMLElement {
       h(
         'div.au-row',
         h('div', `Channel ${i + 1}`),
-        h('div', 'Embedded Audio'),
+        h('div', 'Embedded audio'),
         h('div', sel),
         h('div', pan),
         h('div', gain.el),
@@ -274,12 +274,12 @@ function embeddedTable(o: OutputConfig, render: () => void): HTMLElement {
 function selectionCell(label: string, idx: number, c: AudioOutputChannelConfig): HTMLElement {
   if (c.mode === 'participant') {
     const ps = participants().filter((p) => p.kind === 'camera');
-    const opts: OptList = [{ value: '', label: 'Select Participant' }, ...ps.map((p) => ({ value: p.key, label: p.displayName || p.key }))];
+    const opts: OptList = [{ value: '', label: 'Select participant' }, ...ps.map((p) => ({ value: p.key, label: p.displayName || p.key }))];
     if (c.selection && !ps.some((p) => p.key === c.selection)) opts.push({ value: c.selection, label: `${c.selectionName || c.selection} (offline)` });
     return popup(opts, c.selection, (v) => void patchChannel(label, idx, { selection: v, selectionName: ps.find((p) => p.key === v)?.displayName ?? '' }), { cls: 'sm au-sel' }).el;
   }
   if (c.mode === 'output') {
-    const opts: OptList = [{ value: '', label: 'Select Output' }, ...store.settings.outputs.map((o) => ({ value: o.id, label: o.name }))];
+    const opts: OptList = [{ value: '', label: 'Select output' }, ...store.settings.outputs.map((o) => ({ value: o.id, label: o.name }))];
     return popup(opts, c.selection, (v) => void patchChannel(label, idx, { selection: v }), { cls: 'sm au-sel short' }).el;
   }
   return h('div');
@@ -343,9 +343,9 @@ function channelVisibilityMenu(anchor: HTMLElement, label: string, dev: AudioOut
   };
   const pop = h(
     'div.au-pop',
-    h('div.t', 'Device Channel'),
+    h('div.t', 'Device channel'),
     h('div.list', ...rows),
-    h('div.actions', button('Select All', () => all(true), 'sm'), button('Deselect All', () => all(false), 'sm')),
+    h('div.actions', button('Select all', () => all(true), 'sm'), button('Deselect all', () => all(false), 'sm')),
   );
   pop.style.top = `${r.bottom + 4}px`;
   pop.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
@@ -432,7 +432,7 @@ function openDeviceSheet(): void {
   };
   const sheet = h(
     'div.sheet.ds-sheet',
-    h('div.ds-title', h('h3', 'Select Output Audio Devices'), h('span.lbl', 'Sort by:'), sortPop.el),
+    h('div.ds-title', h('h3', 'Select output audio devices'), h('span.lbl', 'Sort by:'), sortPop.el),
     h('div.ds-cat', 'Windows Audio Devices'),
     available.length || order.length ? list : h('div.au-empty', 'No devices found'),
     h('div.actions', button('Cancel', () => void done(false)), button('Update', () => void done(true), 'primary')),

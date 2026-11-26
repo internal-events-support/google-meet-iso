@@ -22,7 +22,7 @@ export function openRecordingPopover(anchor: HTMLElement): void {
   }
   const list = h('div.rec-list');
   const warn = h('div.rec-warn');
-  const startBtn = button('Start Recording', () => void start(), 'rec-start');
+  const startBtn = button('Start recording', () => void start(), 'rec-start');
   const selected = () => new Set(rec().selectedOutputIds);
   const save = (ids: Set<string>) =>
     void setSettings({ recording: { ...rec(), selectedOutputIds: store.settings.outputs.map((o) => o.id).filter((id) => ids.has(id)) } });
@@ -67,11 +67,11 @@ export function openRecordingPopover(anchor: HTMLElement): void {
 
   const content = h('div.rec-pop',
     h('div.rec-title', 'Select outputs for recording'),
-    h('div.rec-row', button('Select All', () => save(new Set(store.settings.outputs.map((o) => o.id))), 'rec-sm'), button('Deselect All', () => save(new Set()), 'rec-sm')),
+    h('div.rec-row', button('Select all', () => save(new Set(store.settings.outputs.map((o) => o.id))), 'rec-sm'), button('Deselect all', () => save(new Set()), 'rec-sm')),
     list,
     h('hr.rec-div'),
     warn,
-    h('div.rec-row', button('Open Folder', () => void api.openPath('recordings'), 'rec-md'), button('Recording Settings', () => {
+    h('div.rec-row', button('Open folder', () => void api.openPath('recordings'), 'rec-md'), button('Recording settings', () => {
       close();
       void api.openWindow('settings', 'recording');
     }, 'rec-md')),
@@ -90,7 +90,7 @@ export function openRecordingPopover(anchor: HTMLElement): void {
 
 async function confirmStop(): Promise<void> {
   const n = (store.state?.outputs ?? []).filter((o) => o.recording).length || store.settings.outputs.filter((o) => o.record).length;
-  const ok = await confirmSheet('Stop Recording?', `Are you sure you want to stop recording all ${n} output${n === 1 ? '' : 's'}?`, 'Stop Recording', true);
+  const ok = await confirmSheet('Stop recording?', `Are you sure you want to stop recording all ${n} output${n === 1 ? '' : 's'}?`, 'Stop recording', true);
   if (!ok) return;
   const r = await run({ cmd: 'stopRecording' });
   if (r === undefined) for (const o of store.settings.outputs) if (o.record) await updateOutput(o.id, { record: false });

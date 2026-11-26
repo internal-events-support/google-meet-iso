@@ -143,7 +143,7 @@ export function mountParticipants(host: HTMLElement): void {
         h('th', 'Role'),
         h('th', 'Video/Audio'),
         h('th', 'Status'),
-        h('th', 'Output Assignment'),
+        h('th', 'Output assignment'),
         ...outs.map((o, i) => h('th.c-out', { title: o.name }, String(i + 1))),
         h('th'),
       ),
@@ -179,7 +179,7 @@ export function mountParticipants(host: HTMLElement): void {
       'td.pm-av',
       h('span' + (p.muted === null ? '.unknown' : ''), { title: micTitle }, icon(mic)),
       h('span', { title: p.hasVideo ? 'Video on' : 'Video off' }, icon(cam)),
-      p.handRaised ? h('span.pm-hand', { title: 'Raised Hand' }, icon('hand')) : null,
+      p.handRaised ? h('span.pm-hand', { title: 'Raised hand' }, icon('hand')) : null,
     );
   }
 
@@ -202,13 +202,13 @@ export function mountParticipants(host: HTMLElement): void {
       { label: p.pinned ? 'Un-pin' : 'Pin', disabled: !cam, onClick: () => void run({ cmd: 'pin', participant: p.key, on: !p.pinned }) },
       // Spotlight = Meet "Pin to the screen › For everyone" (host / co-host only).
       {
-        label: (p.spotlit ? 'Remove Spotlight' : 'Spotlight') + needHost,
+        label: (p.spotlit ? 'Remove spotlight' : 'Spotlight') + needHost,
         disabled: !cam || !isHost,
         onClick: () => void run({ cmd: 'spotlight', participant: p.key, on: !p.spotlit }),
       },
       null,
       {
-        label: 'Lower Hand' + (p.isSelf ? '' : needHost),
+        label: 'Lower hand' + (p.isSelf ? '' : needHost),
         disabled: !cam || !p.handRaised || (!isHost && !p.isSelf),
         onClick: () => void run({ cmd: 'lowerHand', participant: p.key }),
       },
@@ -239,8 +239,8 @@ export function mountParticipants(host: HTMLElement): void {
     const anyHand = (store.state?.participants ?? []).some((p) => p.handRaised);
     const needHost = isHost ? '' : ' (requires host)';
     menu({ x: e.clientX, y: e.clientY }, [
-      { label: 'Mute All' + needHost, disabled: !isHost, onClick: () => void run({ cmd: 'muteAll' }) },
-      { label: 'Lower All Hands' + needHost, disabled: !isHost || !anyHand, onClick: () => void run({ cmd: 'lowerHand' }) },
+      { label: 'Mute all' + needHost, disabled: !isHost, onClick: () => void run({ cmd: 'muteAll' }) },
+      { label: 'Lower all hands' + needHost, disabled: !isHost || !anyHand, onClick: () => void run({ cmd: 'lowerHand' }) },
     ]);
   });
 

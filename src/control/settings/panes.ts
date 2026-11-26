@@ -47,25 +47,25 @@ export function generalPane(): HTMLElement {
 
   return h(
     'div.s-pane',
-    section('Render settings', [
-      row('Default format', pick(fmtOpts, String(fmtIdx), (v) => void setSettings({ defaultFormat: FORMAT_PRESETS[Number(v)].format }))),
+    section('Format', [
+      row('Default format', pick(fmtOpts, String(fmtIdx), (v) => void setSettings({ defaultFormat: FORMAT_PRESETS[Number(v)].format })), { hint: 'Resolution and frame rate for new outputs' }),
     ]),
-    section('Audio settings', [
+    section('Audio', [
       row('Default channel mode', pick(AUDIO_CHANNEL_MODE_OPTIONS, s.advancedAudio.defaultChannelMode, (v) => void patchGroup('advancedAudio', { defaultChannelMode: v }))),
       row('Default pan pattern', pick(PAN_PATTERN_OPTIONS, s.advancedAudio.defaultPanPattern, (v) => void patchGroup('advancedAudio', { defaultPanPattern: v }))),
       row('Default gain reduction', pick(GAIN_REDUCTION_OPTIONS, String(s.advancedAudio.defaultGainDb), (v) => void patchGroup('advancedAudio', { defaultGainDb: Number(v) }))),
-      row('Default delay', [delaySlider, delayField], { cls: 'slider-row' }),
-      row('Default embedded audio mode', pick(EMBEDDED_AUDIO_OPTIONS, s.embeddedAudio.defaultMode, (v) => void patchGroup('embeddedAudio', { defaultMode: v }))),
+      row('Default delay', [delaySlider, delayField], { cls: 'slider-row', hint: 'Delays audio to line up with the video' }),
+      row('Default embedded audio', pick(EMBEDDED_AUDIO_OPTIONS, s.embeddedAudio.defaultMode, (v) => void patchGroup('embeddedAudio', { defaultMode: v }))),
       row('Default embedded audio delay', numField(s.embeddedAudio.defaultDelayMs, (v) => void patchGroup('embeddedAudio', { defaultDelayMs: v }), { min: 0, max: 5000, suffix: 'ms' })),
     ]),
-    section('Auto assign settings', [
-      row('Include hosts and co-hosts', tog(s.autoAssign.includeHostsAndCoHosts, (v) => void patchGroup('autoAssign', { includeHostsAndCoHosts: v }))),
-      row('Include non-video participants', tog(s.autoAssign.includeNonVideoParticipants, (v) => void patchGroup('autoAssign', { includeNonVideoParticipants: v }))),
-      row('Include self camera', tog(s.autoAssign.includeSelfCamera, (v) => void patchGroup('autoAssign', { includeSelfCamera: v }))),
-      row('Continuously evaluate eligibility', tog(s.autoAssign.continuouslyEvaluateEligibility, (v) => void patchGroup('autoAssign', { continuouslyEvaluateEligibility: v }))),
-      row('Offline participant auto-reassignment', pick(offlineOpts, s.autoAssign.offlineParticipantMatching, (v) => void patchGroup('autoAssign', { offlineParticipantMatching: v as typeof s.autoAssign.offlineParticipantMatching }))),
+    section('Auto assign', [
+      row('Include hosts and co-hosts', tog(s.autoAssign.includeHostsAndCoHosts, (v) => void patchGroup('autoAssign', { includeHostsAndCoHosts: v })), { hint: 'Auto outputs can show the meeting hosts' }),
+      row('Include non-video participants', tog(s.autoAssign.includeNonVideoParticipants, (v) => void patchGroup('autoAssign', { includeNonVideoParticipants: v })), { hint: 'People with their camera off get an output too (shows the loss mode)' }),
+      row('Include self camera', tog(s.autoAssign.includeSelfCamera, (v) => void patchGroup('autoAssign', { includeSelfCamera: v })), { hint: "The bot's own camera can fill an auto output" }),
+      row('Continuously evaluate eligibility', tog(s.autoAssign.continuouslyEvaluateEligibility, (v) => void patchGroup('autoAssign', { continuouslyEvaluateEligibility: v })), { hint: 'Re-check who qualifies as people change camera or role' }),
+      row('When someone rejoins', pick(offlineOpts, s.autoAssign.offlineParticipantMatching, (v) => void patchGroup('autoAssign', { offlineParticipantMatching: v as typeof s.autoAssign.offlineParticipantMatching }))),
     ]),
-    section('Interface settings', [
+    section('Interface', [
       row(
         'Show system performance summary',
         tog(s.interface.showSystemPerformanceSummary, async (v) => {
@@ -79,8 +79,9 @@ export function generalPane(): HTMLElement {
           }
           void patchGroup('interface', { showSystemPerformanceSummary: v });
         }),
+        { hint: 'CPU, memory and network in the bottom bar' },
       ),
-      row('Warn when reducing output count', tog(warnReduceOutputs.get(), (v) => warnReduceOutputs.set(v)), { title: 'Reducing the output count will delete outputs.' }),
+      row('Warn when reducing output count', tog(warnReduceOutputs.get(), (v) => warnReduceOutputs.set(v)), { hint: 'Lowering the count deletes the outputs at the end' }),
     ]),
   );
 }
@@ -95,10 +96,14 @@ export function inMeetingPane(): HTMLElement {
   const img = h('img.s-viewfinder-img') as HTMLImageElement;
   const finder = h('div.s-viewfinder', h('div.s-viewfinder-empty', icon('videoSlash')), img);
   if (!disableCamPreview.get() && cam.type !== 'none') {
-    bindPreview(BOT_CAM_KEY, (url) => {
-      img.src = url;
-      finder.classList.add('live');
-    });
+    bindPreview(
+      BOT_CAM_KEY,
+      (url) => {
+        img.src = url;
+        finder.classList.add('live');
+      },
+      finder,
+    );
   }
   finder.classList.toggle('off', disableCamPreview.get());
 
@@ -131,26 +136,26 @@ export function inMeetingPane(): HTMLElement {
       row('Disable in-app camera preview', tog(disableCamPreview.get(), (v) => {
         disableCamPreview.set(v);
         rerender();
-      })),
-      row('Input Source', pick(inputSources, cam.type, (v) => {
+      }), { hint: 'Only this preview; the camera still goes to Meet' }),
+      row('Input source', pick(inputSources, cam.type, (v) => {
         const type = v as typeof cam.type;
         const name = type === 'device' ? (d.videoInputs[0] ?? '') : type === 'ndi' ? (store.ndiSources[0] ?? '') : '';
         void setSettings({ camera: { type, name } });
-      })),
+      }), { hint: "What the bot sends as its camera in the meeting" }),
       sourceRow,
     ]),
     section('Audio', [
-      row('Microphone', pick(mics, s.micLabel, (v) => void setSettings({ micLabel: v }))),
-      row('Speaker', pick(speakers, s.monitorDevice, (v) => void setSettings({ monitorDevice: v }))),
+      row('Microphone', pick(mics, s.micLabel, (v) => void setSettings({ micLabel: v })), { hint: 'What the bot says in the meeting. None keeps it muted.' }),
+      row('Speaker', pick(speakers, s.monitorDevice, (v) => void setSettings({ monitorDevice: v })), { hint: 'Where you hear the meeting on this computer' }),
     ]),
-    section('Additional', [
-      row('Return to Gallery View after Spotlight', tog(s.autoLayout, (v) => void setSettings({ autoLayout: v })), {
-        info: "Keeps Google Meet in Tiled layout with the maximum tile count so every participant can be captured.",
+    section('Meeting', [
+      row('Return to gallery view after spotlight', tog(s.autoLayout, (v) => void setSettings({ autoLayout: v })), {
+        hint: 'Keeps Meet in tiled layout so every participant can be captured',
       }),
-      row('Gallery tile count', numField(s.maxTiles, (v) => void setSettings({ maxTiles: v }), { min: 6, max: 49 })),
-      row('Join automatically', tog(s.autoJoin, (v) => void setSettings({ autoJoin: v })), { info: 'Click "Join now" / "Ask to join" automatically.' }),
-      row('Admit everyone who asks to join', tog(s.autoAdmit, (v) => void setSettings({ autoAdmit: v })), { info: 'Requires Google Meet ISO to be a host or co-host.' }),
-      row('Join notice', field(s.joinNotice, (v) => void setSettings({ joinNotice: v }), { placeholder: 'Off', cls: 'wide' }), { info: 'Chat message posted when Google Meet ISO joins. Leave empty to turn off.' }),
+      row('Gallery tile count', numField(s.maxTiles, (v) => void setSettings({ maxTiles: v }), { min: 6, max: 49 }), { hint: 'Meet only sends video for tiles it shows' }),
+      row('Join automatically', tog(s.autoJoin, (v) => void setSettings({ autoJoin: v })), { hint: 'Press "Join now" or "Ask to join" for you' }),
+      row('Admit everyone who asks to join', tog(s.autoAdmit, (v) => void setSettings({ autoAdmit: v })), { hint: 'Only works when the bot is a host or co-host' }),
+      row('Join notice', field(s.joinNotice, (v) => void setSettings({ joinNotice: v }), { placeholder: 'Off', cls: 'wide' }), { hint: 'Posted in chat when the bot joins. Empty = off.' }),
     ]),
   );
 }
@@ -162,8 +167,8 @@ export function outputEffectsPane(): HTMLElement {
   const name = path ? path.split(/[\\/]/).pop()! : 'Default';
   return h(
     'div.s-pane',
-    section('Preview Overlays', [
-      row('Custom Framing Guide', [
+    section('Preview overlays', [
+      row('Custom framing guide', [
         h('span.s-dim', { title: path || 'Default' }, name),
         path ? sbtn('Reset', () => void patchGroup('interface', { customFramingGuidePath: '' })) : null,
         sbtn('Browse', async () => {
@@ -213,7 +218,7 @@ export function videoLossPane(): HTMLElement {
         pic.style.background = vv.profilePictureOverrideInitialsBgColor ? vv.profilePictureInitialsBgColor : '#5A5A5A';
         pic.style.fontSize = `calc(${vv.profilePictureSize} * 90px)`;
       }
-      preview.append(h('div.s-pp', pic, vv.profilePictureShowName ? h('div.s-pp-name', 'Participant Name') : null));
+      preview.append(h('div.s-pp', pic, vv.profilePictureShowName ? h('div.s-pp-name', 'Participant name') : null));
     }
     if (vv.mode !== 'profilePicture') preview.style.background = '';
     if (vv.displayOutputNameOnImage) preview.append(h('div.s-loss-outname', label));
@@ -277,6 +282,42 @@ export function videoLossPane(): HTMLElement {
 }
 
 // Set by settings.ts so panes can ask for a rebuild after local-only state changes.
+// ---------------------------------------------------------------- Google account
+/** The bot's Google account (Presentation Player's "Google account" pane). */
+export function accountPane(): HTMLElement {
+  const name = store.settings.botName || '';
+  const signedOut = store.state?.phase === 'signed-out';
+  const signedIn = !!name && !signedOut;
+  const inMeeting = ['in-call', 'waiting', 'green-room'].includes(store.state?.phase ?? '');
+  const initials = name ? name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('') : 'G';
+
+  const err = h('p.form-error');
+  const signIn = sbtn(signedIn ? 'Switch account' : 'Sign in', () => void api.signIn(), { cls: signedIn ? '' : 'primary' });
+  const signOut = sbtn('Sign out', async () => {
+    if (inMeeting && !(await confirmSheet('Sign out?', 'Signing out leaves the current meeting.', 'Sign out', true))) return;
+    signOut.disabled = true;
+    const r = await run({ cmd: 'signOut' });
+    if (r === undefined) err.textContent = 'Sign out failed. See Logs.';
+    rerender();
+  });
+  signOut.hidden = !signedIn;
+
+  return h(
+    'div.s-pane',
+    section(
+      'Google account',
+      [
+        h('div.s-row.account-row' + (signedIn ? '.is-signed-in' : ''),
+          h('span.account-avatar', { 'aria-hidden': 'true' }, initials),
+          h('div.s-label', h('span.account-text', h('strong', signedIn ? name : 'Not signed in'), h('small', signedIn ? 'The hidden Meet client joins meetings as this account.' : 'Sign in to join meetings.'))),
+          h('div.s-ctrl', signIn, signOut)),
+      ],
+      { subtitle: 'Use a dedicated account for the bot. Host tools (admit, mute others) only work when it is a host or co-host. Changes apply straight away.' },
+    ),
+    err,
+  );
+}
+
 let rerender: () => void = () => {};
 export function setRerender(fn: () => void): void {
   rerender = fn;

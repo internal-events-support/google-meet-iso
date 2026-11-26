@@ -5,6 +5,7 @@
 // The preview renders through the same WebGL pipeline as the NDI output (effects/fxgl.ts).
 
 import { api, bindPreview, initStore, on, outputState, store, updateOutput, windowArg } from '../store';
+import { installWindowChrome } from '../chrome';
 import { confirmSheet, h, menu, popup, RE_IMAGES } from '../kit';
 import type { AutoCropResponsiveness, NameTagFont, OutputConfig, OutputEffects, OverlayImage, OverlayLayerRef } from '../../shared/types';
 import {
@@ -207,7 +208,7 @@ let picker: ReturnType<typeof popup> | null = null;
 const pickerOpts = () => (store.settings?.outputs ?? []).map((o) => ({ value: o.id, label: o.name }));
 function renderPicker(): void {
   if (!picker) {
-    picker = popup(pickerOpts(), ui.id, (v) => void switchTo(v), { cls: 'fx-picker', title: 'Select Output' });
+    picker = popup(pickerOpts(), ui.id, (v) => void switchTo(v), { cls: 'fx-picker', title: 'Select output' });
     els.pickerWrap.append(picker.el);
   } else picker.set(pickerOpts(), ui.id);
 }
@@ -215,7 +216,7 @@ function renderPicker(): void {
 async function switchTo(id: string): Promise<void> {
   if (id === ui.id) return;
   if (dirty() && !ui.draft.autoApply) {
-    const ok = await confirmSheet('Unapplied Changes', 'You have unapplied output effects that will be lost if you switch outputs.', 'Proceed', true);
+    const ok = await confirmSheet('Unapplied changes', 'You have unapplied output effects that will be lost if you switch outputs.', 'Proceed', true);
     if (!ok) {
       picker?.set(pickerOpts(), ui.id);
       return;
@@ -335,7 +336,7 @@ function layoutPreview(): void {
 }
 
 function participantName(): string {
-  return outputState(ui.id)?.sourceName || 'Participant Name';
+  return outputState(ui.id)?.sourceName || 'Participant name';
 }
 
 function renderPreview(): void {
@@ -810,7 +811,7 @@ function renderToolbar(): void {
   }
   const g3 = h(
     'div.fx-tb-group',
-    tbButton(ui.bypass ? 'eye.slash' : 'eye', ui.bypass ? 'Show Corrections' : 'Bypass (preview only)', ui.bypass, () => {
+    tbButton(ui.bypass ? 'eye.slash' : 'eye', ui.bypass ? 'Show corrections' : 'Bypass (preview only)', ui.bypass, () => {
       ui.bypass = !ui.bypass;
       renderToolbar();
       ui.dirtyRender = true;
@@ -1086,7 +1087,7 @@ function colorTab(): HTMLElement[] {
         paSlider({ label: 'Highlights', pos: bip(e.highlights), def: 0.5, onPos: (p) => setE({ highlights: unbip(p) }) }),
         paSlider({ label: 'Shadows', pos: bip(e.shadows), def: 0.5, onPos: (p) => setE({ shadows: unbip(p) }) }),
         paSlider({ label: 'Vignette', pos: e.vignette ?? 0, def: 0, onPos: (p) => setE({ vignette: p }) }),
-        h('div.pa-subhead', 'Tone Curve'),
+        h('div.pa-subhead', 'Tone curve'),
         toneCurveEditor(),
         h('div.pa-subhead', 'Lift (Shadows)'),
         ...lggRows(['liftR', 'liftG', 'liftB']),
@@ -1131,7 +1132,7 @@ function croppingTab(): HTMLElement[] {
     h(
       'div.pa-block',
       paSegmented(
-        'Preview Mode',
+        'Preview mode',
         CROP_PREVIEW_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
         ui.previewMode,
         (v) => {
@@ -1143,7 +1144,7 @@ function croppingTab(): HTMLElement[] {
     ),
     section(
       'manual',
-      'Manual Transform',
+      'Manual transform',
       [
         paSlider({ label: 'Scale', pos: ((e.cropZoom ?? 1) - 1) / 4, def: 0, fmt: (p) => `${(1 + p * 4).toFixed(2)}×`, disabled: manualDisabled, onPos: (p) => setE({ cropZoom: Math.round((1 + p * 4) * 1000) / 1000 }) }),
         paSlider({ label: 'Position X', pos: bip(e.cropPanX), def: 0.5, disabled: manualDisabled, onPos: (p) => setE({ cropPanX: unbip(p) }) }),
@@ -1247,14 +1248,14 @@ function overlaysTab(): HTMLElement[] {
     'Name tag',
     [
       paToggle('Show name tag', !!e.nameTag, (v) => setE({ nameTag: v }, true)),
-      paSegmented('Name tag Mode', NAME_TAG_NAME_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagNameMode ?? 'auto', (v) => setE({ nameTagNameMode: v as 'auto' | 'manual' }, true)),
-      manual ? paText('Participant Name', e.nameTagText, 'Participant Name', (v) => setE({ nameTagText: v })) : null,
+      paSegmented('Name tag mode', NAME_TAG_NAME_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagNameMode ?? 'auto', (v) => setE({ nameTagNameMode: v as 'auto' | 'manual' }, true)),
+      manual ? paText('Participant name', e.nameTagText, 'Participant name', (v) => setE({ nameTagText: v })) : null,
       paText('Subtitle', e.nameTagSubtitle, 'Enter subtitle', (v) => setE({ nameTagSubtitle: v })),
       paPopup('Name tag font', NAME_TAG_FONT_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagFont ?? 'helvetica', (v) => setE({ nameTagFont: v as NameTagFont }, true)),
       paSlider({ label: 'Name tag size', pos: ((e.nameTagSize ?? 100) - 50) / 200, def: 0.25, fmt: (p) => `${Math.round(50 + p * 200)}%`, onPos: (p) => setE({ nameTagSize: Math.round(50 + p * 200) }) }),
       paSlider({ label: 'Name tag position', pos: e.nameTagOffset ?? 0.85, def: 0.85, onPos: (p) => setE({ nameTagOffset: p }) }),
-      paSegmented('Name tag placement', NAME_TAG_PLACEMENT_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagPlacement ?? 'left', (v) => setE({ nameTagPlacement: v as 'left' }, true), undefined, 'Reset Name Tag Placement', 'left'),
-      paSegmented('Text alignment', NAME_TAG_ALIGNMENT_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagTextAlignment ?? 'left', (v) => setE({ nameTagTextAlignment: v as 'left' }, true), undefined, 'Reset Text Alignment', 'left'),
+      paSegmented('Name tag placement', NAME_TAG_PLACEMENT_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagPlacement ?? 'left', (v) => setE({ nameTagPlacement: v as 'left' }, true), undefined, 'Reset name tag placement', 'left'),
+      paSegmented('Text alignment', NAME_TAG_ALIGNMENT_OPTIONS.map((o) => ({ value: o.value, label: o.label })), e.nameTagTextAlignment ?? 'left', (v) => setE({ nameTagTextAlignment: v as 'left' }, true), undefined, 'Reset text alignment', 'left'),
       paColor('Name text color', e.nameTagColor ?? '#ffffff', (v) => setE({ nameTagColor: v })),
       paColor('Name tag background color', e.nameTagBg ?? '#000000', (v) => setE({ nameTagBg: v }), { value: e.nameTagBgOpacity ?? 0.78, set: (v) => setE({ nameTagBgOpacity: v }) }),
       paSlider({ label: 'Corner radius', pos: (e.nameTagCornerRadius ?? 6) / 40, def: 6 / 40, fmt: (p) => `${Math.round(p * 40)}`, onPos: (p) => setE({ nameTagCornerRadius: Math.round(p * 40) }) }),
@@ -1319,11 +1320,11 @@ function overlaysTab(): HTMLElement[] {
       ),
     );
   });
-  const addBtn = h('button.btn.sm', 'Add Image') as HTMLButtonElement;
+  const addBtn = h('button.btn.sm', 'Add image') as HTMLButtonElement;
   addBtn.addEventListener('click', () => void addImage());
-  const delAll = h('button.btn.sm', { disabled: !(e.images ?? []).length }, 'Delete All Images') as HTMLButtonElement;
+  const delAll = h('button.btn.sm', { disabled: !(e.images ?? []).length }, 'Delete all images') as HTMLButtonElement;
   delAll.addEventListener('click', async () => {
-    if (!(await confirmSheet('Delete All Images', 'Are you sure you want to delete all overlay images?', 'Delete All', true))) return;
+    if (!(await confirmSheet('Delete all images', 'Are you sure you want to delete all overlay images?', 'Delete all', true))) return;
     ui.editing = null;
     setE({ images: [], overlayLayerOrder: ['nameTag'] }, true);
   });
@@ -1370,15 +1371,15 @@ function renderFooter(): void {
     apply();
   });
   const isDirty = dirty();
-  const save = h('button.fx-foot-icon', { title: 'Save Preset' }, svgIcon('tray.down')) as HTMLButtonElement;
+  const save = h('button.fx-foot-icon', { title: 'Save preset' }, svgIcon('tray.down')) as HTMLButtonElement;
   save.addEventListener('click', savePreset);
-  const load = h('button.fx-foot-icon', { title: 'Load Preset' }, svgIcon('folder')) as HTMLButtonElement;
+  const load = h('button.fx-foot-icon', { title: 'Load preset' }, svgIcon('folder')) as HTMLButtonElement;
   load.addEventListener('click', loadPreset);
   const applyBtn = h('button.fx-apply', { disabled: autoApply || !isDirty, title: autoApply ? 'Changes are applied automatically' : 'Apply settings to video output' }, svgIcon('checkmark'), h('span', 'Apply')) as HTMLButtonElement;
   applyBtn.addEventListener('click', apply);
   els.footer.replaceChildren(
-    h('label.fx-autoapply', { title: autoApply ? 'Changes are applied automatically' : 'Apply changes to the output as you edit' }, auto, h('span', 'Auto Apply')),
-    h('span.fx-status', !autoApply && isDirty ? 'Unapplied Changes' : ''),
+    h('label.fx-autoapply', { title: autoApply ? 'Changes are applied automatically' : 'Apply changes to the output as you edit' }, auto, h('span', 'Auto apply')),
+    h('span.fx-status', !autoApply && isDirty ? 'Unapplied changes' : ''),
     h('span.pa-spacer'),
     save,
     load,
@@ -1412,7 +1413,7 @@ function loadPreset(): void {
       ui.editing = null;
       changed(true);
     } catch (err) {
-      void confirmSheet('Load Preset', `Couldn't read that preset: ${(err as Error).message}`, 'OK');
+      void confirmSheet('Load preset', `Couldn't read that preset: ${(err as Error).message}`, 'OK');
     }
   });
   input.click();
@@ -1449,6 +1450,7 @@ function loop(now: number): void {
 }
 
 void initStore().then(() => {
+  installWindowChrome();
   buildSkeleton();
   ui.id = windowArg() || store.settings.outputs[0]?.id || '';
   seedFrom(cfg());

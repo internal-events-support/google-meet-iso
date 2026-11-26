@@ -1,6 +1,14 @@
 /* Shared chrome for secondary windows (Settings / Output Effects / Performance Details). */
 body.window { display: flex; flex-direction: column; }
-.titlebar { height: 38px; flex: none; display: flex; align-items: center; padding: 0 14px; background: var(--bar); -webkit-app-region: drag; border-bottom: 1px solid rgba(0,0,0,.45); }
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; padding: 0 12px 0 14px; background: var(--bar); -webkit-app-region: drag; border-bottom: 1px solid rgba(0,0,0,.45); }
 .titlebar .title { font-size: var(--fs); font-weight: 600; color: var(--text-2); }
 .titlebar button, .titlebar label, .titlebar input { -webkit-app-region: no-drag; }
 body.window #app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.titlebar .titlebar-spacer { flex: 1; }
+.titlebar .win-buttons { display: flex; align-self: stretch; margin-right: -12px; -webkit-app-region: no-drag; }
+.titlebar .win-buttons button { width: 46px; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); display: grid; place-items: center; }
+.titlebar .win-buttons button:hover { background: rgba(255,255,255,.1); }
+.titlebar .win-buttons .win-close:hover { background: #C42B1C; color: #fff; }
+.titlebar .win-buttons svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+.titlebar .win-buttons .i-restore, .is-maximized .titlebar .win-buttons .i-max { display: none; }
+.is-maximized .titlebar .win-buttons .i-restore { display: block; }

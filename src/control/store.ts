@@ -37,14 +37,130 @@ function emit(topic: Topic): void {
 const previewUrls = new Map<string, string>();
 const previewSubs = new Map<string, Set<(url: string) => void>>();
 
-/** Subscribe an <img> (or callback) to a preview key. Returns unsubscribe. */
-export function bindPreview(key: string, target: HTMLImageElement | ((url: string) => void)): () => void {
+/** The element each subscriber shows the preview in: the key only counts as wanted while it's visible. */
+const previewEls = new Map<unknown, Element>();
+
+/**
+ * Subscribe an <img> (or callback) to a preview key. Returns unsubscribe. Pass `el` (the element
+ * the callback shows the preview in) so the preview is only produced while that element is visible.
+ */
+export function bindPreview(key: string, target: HTMLImageElement | ((url: string) => void), el?: Element): () => void {
   const fn = typeof target === 'function' ? target : (url: string) => (target.src = url);
+  const shown = typeof target === 'function' ? el : target;
+  if (shown) previewEls.set(fn, shown);
   if (!previewSubs.has(key)) previewSubs.set(key, new Set());
   previewSubs.get(key)!.add(fn);
   const cur = previewUrls.get(key);
   if (cur) fn(cur);
-  return () => previewSubs.get(key)?.delete(fn);
+  queueSyncPreviewKeys();
+  return () => {
+    previewSubs.get(key)?.delete(fn);
+    previewEls.delete(fn);
+    queueSyncPreviewKeys();
+  };
+}
+
+/**
+ * Canvas previews for fast-changing images: each JPEG is decoded off-thread (createImageBitmap)
+ * and handed to a 'bitmaprenderer' canvas, which shows it without re-rasterising the page (an
+ * <img> src swap per frame made the GPU process re-raster, which at high preview rates slowed
+ * the whole video pipeline). `onFrame` runs after each new frame is shown.
+ */
+interface CanvasSub {
+  canvas: HTMLCanvasElement;
+  ctx: ImageBitmapRenderingContext;
+  onFrame?: () => void;
+}
+const canvasSubs = new Map<string, Set<CanvasSub>>();
+const lastJpeg = new Map<string, ArrayBuffer>();
+/** Keys whose decode is in flight / the newest JPEG that arrived meanwhile (latest wins). */
+const decoding = new Set<string>();
+const queuedJpeg = new Map<string, ArrayBuffer>();
+
+export function bindPreviewCanvas(key: string, canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
+  const ctx = canvas.getContext('bitmaprenderer');
+  if (!ctx) return () => {};
+  const sub: CanvasSub = { canvas, ctx, onFrame };
+  if (!canvasSubs.has(key)) canvasSubs.set(key, new Set());
+  canvasSubs.get(key)!.add(sub);
+  previewEls.set(sub, canvas);
+  const last = lastJpeg.get(key);
+  if (last) void showOn(key, last, [sub]);
+  queueSyncPreviewKeys();
+  return () => {
+    canvasSubs.get(key)?.delete(sub);
+    previewEls.delete(sub);
+    queueSyncPreviewKeys();
+  };
+}
+
+async function showOn(key: string, jpeg: ArrayBuffer, subs: Iterable<CanvasSub>): Promise<void> {
+  for (const sub of subs) {
+    try {
+      const bmp = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+      if (!canvasSubs.get(key)?.has(sub)) {
+        bmp.close();
+        continue;
+      }
+      // The canvas keeps its own size (default 300×150) for layout/object-fit: match the frame.
+      if (sub.canvas.width !== bmp.width || sub.canvas.height !== bmp.height) {
+        sub.canvas.width = bmp.width;
+        sub.canvas.height = bmp.height;
+      }
+      sub.ctx.transferFromImageBitmap(bmp);
+      sub.onFrame?.();
+    } catch {
+      /* undecodable frame: keep the previous one */
+    }
+  }
+}
+
+function showCanvases(key: string, jpeg: ArrayBuffer): void {
+  lastJpeg.set(key, jpeg);
+  const subs = canvasSubs.get(key);
+  if (!subs?.size) return;
+  if (decoding.has(key)) {
+    queuedJpeg.set(key, jpeg);
+    return;
+  }
+  decoding.add(key);
+  void showOn(key, jpeg, [...subs]).finally(() => {
+    decoding.delete(key);
+    const next = queuedJpeg.get(key);
+    queuedJpeg.delete(key);
+    if (next) showCanvases(key, next);
+  });
+}
+
+function isShown(el: Element | undefined): boolean {
+  return !el || (el.isConnected && (el.checkVisibility ? el.checkVisibility() : (el as HTMLElement).offsetParent !== null));
+}
+
+/** Keys with a visible subscriber (callbacks always count) while this window is visible. */
+function wantedPreviewKeys(): string[] {
+  if (document.visibilityState !== 'visible') return [];
+  const out: string[] = [];
+  for (const key of new Set([...previewSubs.keys(), ...canvasSubs.keys()])) {
+    const subs: unknown[] = [...(previewSubs.get(key) ?? []), ...(canvasSubs.get(key) ?? [])];
+    if (subs.some((sub) => isShown(previewEls.get(sub)))) out.push(key);
+  }
+  return out.sort();
+}
+
+let sentPreviewKeys: string | null = null;
+let previewSyncQueued = false;
+function syncPreviewKeys(): void {
+  previewSyncQueued = false;
+  const keys = wantedPreviewKeys();
+  const sig = keys.join('\n');
+  if (sig === sentPreviewKeys) return;
+  sentPreviewKeys = sig;
+  api.setPreviewKeys?.(keys);
+}
+function queueSyncPreviewKeys(): void {
+  if (previewSyncQueued) return;
+  previewSyncQueued = true;
+  setTimeout(syncPreviewKeys, 50);
 }
 
 export function previewUrl(key: string): string | undefined {
@@ -114,6 +230,9 @@ export function initStore(): Promise<void> {
     });
     api.onLog(pushLog);
     api.onPreview((key, jpeg) => {
+      showCanvases(key, jpeg);
+      // Blob URLs only for <img>/callback subscribers (and previewUrl()).
+      if (!previewSubs.get(key)?.size) return;
       const url = URL.createObjectURL(new Blob([jpeg], { type: 'image/jpeg' }));
       const old = previewUrls.get(key);
       previewUrls.set(key, url);
@@ -122,6 +241,9 @@ export function initStore(): Promise<void> {
     });
     void refreshNdi();
     setInterval(() => void refreshNdi(), 10000);
+    // Tabs/drawers show and hide preview elements without unsubscribing: re-check visibility.
+    setInterval(syncPreviewKeys, 500);
+    document.addEventListener('visibilitychange', syncPreviewKeys);
   })();
   return started;
 }

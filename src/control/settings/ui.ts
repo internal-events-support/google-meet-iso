@@ -50,6 +50,8 @@ export function info(text: string): HTMLElement {
 }
 
 export interface RowOpts {
+  /** One short grey line under the label explaining the setting (Presentation Player style). */
+  hint?: string;
   info?: string;
   title?: string;
   cls?: string;
@@ -60,7 +62,10 @@ export interface RowOpts {
 /** One line of a grouped list: label (+ⓘ) on the left, control(s) on the right. */
 export function row(label: Child, control: Child | Child[], o: RowOpts = {}): HTMLElement {
   const ctrls = Array.isArray(control) ? control : [control];
-  const el = h('div.s-row', h('div.s-label', label, o.info ? info(o.info) : null), h('div.s-ctrl', ...ctrls));
+  const lab = o.hint
+    ? h('div.s-label.has-hint', h('span.s-label-text', label, o.info ? info(o.info) : null), h('small.s-hint', o.hint))
+    : h('div.s-label', label, o.info ? info(o.info) : null);
+  const el = h('div.s-row', lab, h('div.s-ctrl', ...ctrls));
   if (o.cls) el.className += ' ' + o.cls;
   if (o.sub) el.classList.add('sub');
   if (o.title) el.title = o.title;

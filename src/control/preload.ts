@@ -17,6 +17,17 @@ const api: ControlApi = {
   pickFile: (kind) => ipcRenderer.invoke('ctl:pickFile', kind),
   system: () => ipcRenderer.invoke('ctl:system'),
   openWindow: (kind, arg) => ipcRenderer.invoke('ctl:openWindow', kind, arg),
+  popOutSettings: (arg) => ipcRenderer.invoke('ctl:popOutSettings', arg ?? ''),
+  onOpenSettings: (cb: (arg: string) => void) => {
+    ipcRenderer.on('ctl:openSettings', (_e, arg: string) => cb(arg));
+  },
+  windowAction: (a) => ipcRenderer.send('ctl:windowAction', a),
+  onWindowState: (cb: (s: { maximized: boolean }) => void) => {
+    ipcRenderer.on('ctl:windowState', (_e, s: { maximized: boolean }) => cb(s));
+  },
+  restartApp: () => ipcRenderer.invoke('ctl:restartApp'),
+  checkUpdates: () => ipcRenderer.invoke('ctl:checkUpdates'),
+  openExternal: (url: string) => ipcRenderer.invoke('ctl:openExternal', url),
   logs: () => ipcRenderer.invoke('ctl:logs'),
   perfHistory: () => ipcRenderer.invoke('ctl:perfHistory'),
   perfControl: (action) => ipcRenderer.invoke('ctl:perfControl', action),
@@ -29,6 +40,7 @@ const api: ControlApi = {
   onLog: (cb: (l: string) => void) => {
     ipcRenderer.on('ctl:log', (_e, l: string) => cb(l));
   },
+  setPreviewKeys: (keys: string[]) => ipcRenderer.send('ctl:previewKeys', keys),
   onPreview: (cb: (key: string, jpeg: ArrayBuffer) => void) => {
     ipcRenderer.on('ctl:preview', (_e, key: string, jpeg: Uint8Array) => cb(key, jpeg as unknown as ArrayBuffer));
   },

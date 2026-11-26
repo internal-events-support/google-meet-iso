@@ -43,8 +43,8 @@ export function mountVideo(host: HTMLElement): void {
   const showOv = toggle(localStorage.getItem(OVERLAYS_KEY) === '1', (v) => {
     localStorage.setItem(OVERLAYS_KEY, v ? '1' : '0');
     body.classList.toggle('show-overlays', v);
-  }, { cls: 'sm', title: 'Show Overlays' });
-  const ovWrap = h('label.vo-ov-toggle', 'Show Overlays', showOv.el);
+  }, { cls: 'sm', title: 'Show overlays' });
+  const ovWrap = h('label.vo-ov-toggle', 'Show overlays', showOv.el);
 
   const arr = segmented(
     OUTPUT_ARRANGEMENT_OPTIONS.map((o) => ({ value: o.value, label: o.label, icon: ARR_ICON[o.value] })),
@@ -56,7 +56,7 @@ export function mountVideo(host: HTMLElement): void {
     'sm vo-arr');
 
   const bar = h('div.vo-bar',
-    h('div.vo-bar-l', h('span.vo-count-label', 'Number of Outputs'), count.el, ovWrap),
+    h('div.vo-bar-l', h('span.vo-count-label', 'Number of outputs'), count.el, ovWrap),
     h('div.vo-bar-r', arr.el));
 
   // ---------------- views

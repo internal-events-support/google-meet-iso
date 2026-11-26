@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, type
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import {
   DEFAULT_EFFECTS,
   DEFAULT_SETTINGS,
@@ -26,18 +27,24 @@ import {
   type PerfSample,
   type Settings,
   type SystemStats,
+  type UpdateInfo,
   type WindowKind,
 } from '../shared/types';
 import { ApiServer } from './api';
 import { carryOver, OldAppRunning } from './carryover';
+import { startBench } from './bench';
 import { applyNdiConfig } from './ndiconfig';
 import { OscServer, type OscArg, type OscMessage } from './osc';
 import { OscRouter, setActiveRouter } from './osc/router'; // [osc-agent]
 // userData = %APPDATA%/Google Meet ISO (from productName) for both dev and packaged runs.
 
+// GMEET_ISO_USER_DATA: run on a separate profile (benchmarks / tests). It also gets its own
+// single-instance lock, so it can run next to the operator's copy.
+const USER_DATA_OVERRIDE = process.env.GMEET_ISO_USER_DATA;
+if (USER_DATA_OVERRIDE) app.setPath('userData', USER_DATA_OVERRIDE);
 const firstInstance = app.requestSingleInstanceLock();
 // Before anything opens the profile: bring settings and the Google sign-in over from GMeet ISO.
-if (firstInstance && !app.commandLine.hasSwitch('user-data-dir')) {
+if (firstInstance && !USER_DATA_OVERRIDE && !app.commandLine.hasSwitch('user-data-dir')) {
   try {
     const from = carryOver(app.getPath('appData'), app.getPath('userData'), path.join(os.homedir(), 'Videos', 'GMeet ISO'));
     if (from) console.log(`Copied settings and sign-in from ${from}`);
@@ -58,6 +65,8 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Opt-in: exposes the Shape Detection API (FaceDetector) that output auto-crop needs.
+if (process.env.GMEET_ISO_EXPERIMENTAL_WEB === '1') app.commandLine.appendSwitch('enable-experimental-web-platform-features');
 
 // Google blocks sign-in from user agents that look like embedded browsers.
 const chromeMajor = process.versions.chrome.split('.')[0];
@@ -72,6 +81,11 @@ const MEET_PARTITION = 'persist:meet';
 const MEET_HOME = 'https://meet.google.com/';
 const IS_MOCK = process.env.GMEET_ISO_MOCK === '1';
 const MOCK_PAGE = path.join(__dirname, '..', '..', 'static', 'mock-meet.html');
+/** Mock page query (participants, resolution, jank…; see static/mock-meet.html). */
+const MOCK_QUERY = process.env.GMEET_ISO_MOCK_QUERY ?? '';
+const MOCK_URL = `${pathToFileURL(MOCK_PAGE).href}${MOCK_QUERY ? `?${MOCK_QUERY}` : ''}`;
+/** Benchmark mode (scripts/bench.js): result file path. */
+const BENCH_OUT = process.env.GMEET_ISO_BENCH ?? '';
 const ICON = path.join(__dirname, '..', '..', 'static', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 
 // ---------- settings ----------
@@ -104,6 +118,8 @@ function mergeNested(base: Settings, patch: Partial<Settings>): Settings {
 /** Build a full Settings from a (possibly old) settings.json, migrating legacy flat fields into the v3 groups. */
 function migrateSettings(raw: Partial<Settings>): Settings {
   const s = mergeNested(DEFAULT_SETTINGS, raw);
+  // 8 was the old default and there's no UI for it: previews are cheap enough now for 15.
+  if (raw.previewFps === 8) s.previewFps = DEFAULT_SETTINGS.previewFps;
   if (!raw.videoLoss) s.videoLoss = { ...s.videoLoss, mode: s.defaultLossMode, image: s.defaultLossImage };
   if (!raw.recording)
     s.recording = {
@@ -190,6 +206,8 @@ const displayWins = new Map<string, { win: BrowserWindow; key: string }>();
 let lastDevices: DeviceLists = { videoInputs: [], audioInputs: [], audioOutputs: [] };
 let lastState: MeetState | null = null;
 let quitting = false;
+/** NDI network settings were changed and only apply after a restart. */
+let restartNeeded = false;
 
 /** Secondary UI windows (settings, effects, perf) — all share the control preload. */
 const uiWindows = new Map<WindowKind, BrowserWindow>();
@@ -211,11 +229,33 @@ function log(line: string): void {
 
 const WINDOW_SPECS: Record<WindowKind, { title: string; width: number; height: number; minWidth: number; minHeight: number; page: string }> = {
   settings: { title: 'Settings', width: 1000, height: 720, minWidth: 820, minHeight: 520, page: 'settings.html' },
-  effects: { title: 'Output Effects', width: 1440, height: 860, minWidth: 1100, minHeight: 640, page: 'effects.html' },
-  perf: { title: 'Performance Details', width: 1340, height: 900, minWidth: 980, minHeight: 600, page: 'perf.html' },
+  effects: { title: 'Output effects', width: 1440, height: 860, minWidth: 1100, minHeight: 640, page: 'effects.html' },
+  perf: { title: 'Performance details', width: 1340, height: 900, minWidth: 980, minHeight: 600, page: 'perf.html' },
 };
 
-function openUiWindow(kind: WindowKind, arg = ''): void {
+/** Tell a window's UI when it is maximised / restored (custom caption buttons). */
+function wireWindowState(win: BrowserWindow): void {
+  const send = () => !win.isDestroyed() && win.webContents.send(IPC.windowState, { maximized: win.isMaximized() });
+  win.on('maximize', send);
+  win.on('unmaximize', send);
+  win.webContents.on('did-finish-load', send);
+}
+
+/**
+ * Settings opens as a dialog in the main window (like Presentation Player), unless it has been
+ * popped out into its own window, which then stays the place it opens.
+ */
+function openSettings(arg = ''): void {
+  const popped = uiWindows.get('settings');
+  if (popped && !popped.isDestroyed()) return openUiWindow('settings', arg, true);
+  if (!controlWin || controlWin.isDestroyed()) return openUiWindow('settings', arg, true);
+  if (controlWin.isMinimized()) controlWin.restore();
+  controlWin.focus();
+  controlWin.webContents.send(IPC.openSettings, arg);
+}
+
+function openUiWindow(kind: WindowKind, arg = '', asWindow = false): void {
+  if (kind === 'settings' && !asWindow) return openSettings(arg);
   const existing = uiWindows.get(kind);
   const spec = WINDOW_SPECS[kind];
   const file = path.join(__dirname, '..', '..', 'static', spec.page);
@@ -234,13 +274,22 @@ function openUiWindow(kind: WindowKind, arg = ''): void {
     icon: ICON,
     backgroundColor: '#1e1e1e',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 38 },
     webPreferences: { preload: path.join(__dirname, '..', 'control', 'preload.js'), contextIsolation: true, sandbox: true },
   });
   win.removeMenu();
+  wireWindowState(win);
   void win.loadFile(file, { query: arg ? { arg } : {} });
   win.on('closed', () => uiWindows.delete(kind));
   uiWindows.set(kind, win);
+}
+
+// ---------- preview subscriptions ----------
+/** Preview keys each UI window is showing (by webContents id). The Meet page encodes only their union. */
+const previewWanted = new Map<number, string[]>();
+function pushPreviewKeys(): void {
+  const all = new Set<string>();
+  for (const keys of previewWanted.values()) for (const k of keys) all.add(k);
+  if (meetWin && !meetWin.isDestroyed()) meetWin.webContents.send(IPC.meetPreviewKeys, [...all]);
 }
 
 // ---------- performance history (1 Hz, 30 min) ----------
@@ -281,8 +330,8 @@ function createControlWindow(): void {
     icon: ICON,
     backgroundColor: '#1e1e1e',
     // ZoomISO-style unified toolbar: our top bar is the title bar; Windows caption buttons overlay it.
+    // Frameless title bar: the UI draws its own caption buttons (as Presentation Player does).
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 48 },
     webPreferences: {
       preload: path.join(__dirname, '..', 'control', 'preload.js'),
       contextIsolation: true,
@@ -292,6 +341,7 @@ function createControlWindow(): void {
   // Keep the application menu attached (accelerators: Ctrl+, / Ctrl+S / Ctrl+O …) but don't draw a menu bar;
   // the UI can show it with gmeetIso.popupAppMenu().
   controlWin.setMenuBarVisibility(false);
+  wireWindowState(controlWin);
   void controlWin.loadFile(path.join(__dirname, '..', '..', 'static', 'control.html'));
   controlWin.on('closed', () => {
     controlWin = null;
@@ -346,6 +396,7 @@ function ensureMeetWindow(): BrowserWindow {
     if (!wc.isDestroyed() && Math.abs(wc.getZoomFactor() - MEET_ZOOM) > 0.01) wc.setZoomFactor(MEET_ZOOM);
   };
   wc.on('did-finish-load', applyZoom);
+  wc.on('did-finish-load', pushPreviewKeys);
   wc.on('did-navigate-in-page', applyZoom);
   wc.setFrameRate(30);
   wc.setAudioMuted(settings.muteLocalAudio);
@@ -416,7 +467,7 @@ async function leaveMeeting(): Promise<void> {
   if (!meetWin || meetWin.isDestroyed()) return;
   meetWin.webContents.send(IPC.meetLeave);
   await new Promise((r) => setTimeout(r, 1500));
-  await meetWin.loadURL(IS_MOCK ? `file://${MOCK_PAGE}` : MEET_HOME);
+  await meetWin.loadURL(IS_MOCK ? MOCK_URL : MEET_HOME);
 }
 
 async function dumpMeetDom(): Promise<string> {
@@ -458,13 +509,15 @@ function applySettingsPatch(patch: Partial<Settings>): Settings {
     if (a.enabled !== b.enabled || a.rxPort !== b.rxPort || a.interface !== b.interface) restartOsc();
     if (osc) osc.minGapMs = OSC_BAUD_MS[b.baudRate] ?? 0;
   }
-  if (patch.apiEnabled !== undefined || patch.apiPort !== undefined) restartApi();
+  if (patch.apiEnabled !== undefined || patch.apiPort !== undefined || patch.apiAllowRemote !== undefined) restartApi();
+  if (patch.checkForUpdates && !prev.checkForUpdates) void checkUpdates();
   if (
     (patch.ndiDiscoveryServer !== undefined && patch.ndiDiscoveryServer !== prev.ndiDiscoveryServer) ||
     (patch.ndiNicIps !== undefined && patch.ndiNicIps !== prev.ndiNicIps)
   ) {
     applyNdiConfig(app.getPath('userData'), settings.ndiDiscoveryServer, settings.ndiNicIps);
     log('NDI network settings saved — restart Google Meet ISO to apply');
+    restartNeeded = true;
   }
   pushSettings();
   return settings;
@@ -1044,10 +1097,10 @@ function buildAppMenu(): Menu {
             }),
         },
         { type: 'separator' },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openUiWindow('settings') },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openSettings() },
         { type: 'separator' },
         { label: 'Sign in with embedded browser', click: () => openSignIn() },
-        { label: 'Sign Out', click: () => void signOut().catch((e) => log(`sign out failed: ${(e as Error).message}`)) },
+        { label: 'Sign out', click: () => void signOut().catch((e) => log(`sign out failed: ${(e as Error).message}`)) },
         { type: 'separator' },
         { label: 'Quit Google Meet ISO', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
@@ -1055,10 +1108,10 @@ function buildAppMenu(): Menu {
     {
       label: 'File',
       submenu: [
-        { label: 'Export Configuration', accelerator: 'CmdOrCtrl+S', click: () => void saveShow().catch((e) => log(`export failed: ${(e as Error).message}`)) },
-        { label: 'Load Configuration', accelerator: 'CmdOrCtrl+O', click: () => void loadShow().catch((e) => log(`load failed: ${(e as Error).message}`)) },
+        { label: 'Export configuration', accelerator: 'CmdOrCtrl+S', click: () => void saveShow().catch((e) => log(`export failed: ${(e as Error).message}`)) },
+        { label: 'Load configuration', accelerator: 'CmdOrCtrl+O', click: () => void loadShow().catch((e) => log(`load failed: ${(e as Error).message}`)) },
         { type: 'separator' },
-        { label: 'Clear Cache (app will close)', click: () => void clearCache(true) },
+        { label: 'Clear cache (app will close)', click: () => void clearCache(true) },
       ],
     },
     {
@@ -1081,14 +1134,14 @@ function buildAppMenu(): Menu {
         { role: 'minimize' },
         { role: 'zoom' },
         { type: 'separator' },
-        { label: 'Show Logging', click: () => openUiWindow('settings', 'logs') },
+        { label: 'Show logs', click: () => openSettings('logs') },
       ],
     },
     {
       label: 'Help',
       submenu: [
         {
-          label: 'Google Meet ISO Help',
+          label: 'Google Meet ISO help',
           accelerator: 'F1',
           click: () => {
             const readme = path.join(__dirname, '..', '..', 'README.md');
@@ -1096,7 +1149,8 @@ function buildAppMenu(): Menu {
             else void shell.openExternal('https://support.google.com/meet');
           },
         },
-        { label: 'Check for Updates', enabled: false },
+        { label: 'Check for updates…', click: () => openSettings('updates') },
+        { label: 'Keyboard shortcuts', click: () => openSettings('shortcuts') },
       ],
     },
   ];
@@ -1117,7 +1171,60 @@ function restartApi(): void {
   api = null;
   if (!settings.apiEnabled) return;
   api = new ApiServer(executeCommand, snapshot, log);
-  api.start(settings.apiPort);
+  api.start(settings.apiPort, settings.apiAllowRemote ? '0.0.0.0' : '127.0.0.1');
+}
+
+/** IPv4 adapters (OSC / NDI interface pickers, API addresses). */
+function nicList(): { name: string; address: string }[] {
+  const out: { name: string; address: string }[] = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) out.push({ name, address: a.address });
+  }
+  return out;
+}
+
+/** Where the API can be reached from (this computer, plus each network adapter when remote access is on). */
+function apiUrls(): string[] {
+  if (!settings.apiEnabled) return [];
+  const port = settings.apiPort;
+  const urls = [`http://127.0.0.1:${port}`];
+  if (settings.apiAllowRemote) for (const n of nicList()) urls.push(`http://${n.address}:${port}`);
+  return urls;
+}
+
+// ---------- updates ----------
+const RELEASES_API = 'https://api.github.com/repos/internal-events-support/google-meet-iso/releases/latest';
+const RELEASES_PAGE = 'https://github.com/internal-events-support/google-meet-iso/releases';
+let updateInfo: UpdateInfo = { status: 'idle', current: app.getVersion(), url: RELEASES_PAGE };
+
+function newerVersion(a: string, b: string): boolean {
+  const pa = a.replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = b.replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
+  return false;
+}
+
+/** Asks GitHub for the latest release (no account or personal data is sent). */
+async function checkUpdates(): Promise<UpdateInfo> {
+  const current = app.getVersion();
+  updateInfo = { ...updateInfo, status: 'checking', current };
+  broadcast(IPC.system, systemStats());
+  try {
+    const r = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'GoogleMeetISO-update-check' } });
+    if (r.status === 404 || r.status === 401 || r.status === 403) {
+      updateInfo = { status: 'unavailable', current, url: RELEASES_PAGE, checkedAt: Date.now(), message: "The releases aren't public, so the app can't see them. Check the releases page instead." };
+    } else if (!r.ok) {
+      updateInfo = { status: 'error', current, url: RELEASES_PAGE, checkedAt: Date.now(), message: `GitHub answered ${r.status}.` };
+    } else {
+      const j = (await r.json()) as { tag_name?: string; html_url?: string };
+      const latest = (j.tag_name ?? '').replace(/^v/, '');
+      updateInfo = { status: latest && newerVersion(latest, current) ? 'available' : 'current', current, latest, url: j.html_url || RELEASES_PAGE, checkedAt: Date.now() };
+    }
+  } catch (e) {
+    updateInfo = { status: 'error', current, url: RELEASES_PAGE, checkedAt: Date.now(), message: `Couldn't reach GitHub (${(e as Error).message}).` };
+  }
+  broadcast(IPC.system, systemStats());
+  return updateInfo;
 }
 
 // ---------- display outputs ----------
@@ -1128,6 +1235,12 @@ function syncDisplays(): void {
     if (o.display === null || o.display === undefined || !o.enabled) continue;
     const d = displays.find((x) => x.id === o.display);
     if (d) wanted.set(o.id, { name: o.name, display: d });
+    // Benchmarks/tests: display -1 = a small window on the primary display instead of full screen.
+    else if (o.display === -1 && process.env.GMEET_ISO_DISPLAY_TEST === '1') {
+      const p = screen.getPrimaryDisplay();
+      const i = wanted.size;
+      wanted.set(o.id, { name: o.name, display: { ...p, id: -1, bounds: { x: p.bounds.x + 20 + i * 500, y: p.bounds.y + 20, width: 480, height: 270 } } });
+    }
   }
   for (const [id, w] of displayWins) {
     const want = wanted.get(id);
@@ -1145,7 +1258,7 @@ function syncDisplays(): void {
       width: b.width,
       height: b.height,
       frame: false,
-      fullscreen: true,
+      fullscreen: want.display.id !== -1,
       skipTaskbar: true,
       backgroundColor: '#000000',
       title: `Google Meet ISO — ${want.name}`,
@@ -1174,6 +1287,9 @@ function systemStats(): SystemStats {
     displays: screen.getAllDisplays().map((d, i) => ({ id: d.id, label: `Display ${i + 1} (${d.size.width}×${d.size.height})`, primary: d.id === primary })),
     oscPort: settings.oscEnabled ? settings.oscListenPort : null,
     apiUrl: settings.apiEnabled ? `http://127.0.0.1:${settings.apiPort}` : null,
+    apiUrls: apiUrls(),
+    restartNeeded,
+    update: updateInfo,
   };
 }
 
@@ -1219,6 +1335,25 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.system, () => systemStats());
   ipcMain.handle(IPC.openWindow, (_e, kind: WindowKind, arg?: string) => openUiWindow(kind, arg ?? ''));
+  ipcMain.handle(IPC.popOutSettings, (_e, arg?: string) => openUiWindow('settings', arg ?? '', true));
+  ipcMain.on(IPC.windowAction, (e, a: 'minimize' | 'maximize' | 'close') => {
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (!w) return;
+    if (a === 'minimize') w.minimize();
+    else if (a === 'maximize') {
+      if (w.isMaximized()) w.unmaximize();
+      else w.maximize();
+    } else if (a === 'close') w.close();
+  });
+  ipcMain.handle(IPC.restartApp, () => {
+    log('Restarting Google Meet ISO');
+    app.relaunch();
+    app.quit(); // before-quit leaves the call cleanly first
+  });
+  ipcMain.handle(IPC.checkUpdates, () => checkUpdates());
+  ipcMain.handle(IPC.openExternal, (_e, url: string) => {
+    if (typeof url === 'string' && /^https:\/\/github\.com\//.test(url)) void shell.openExternal(url);
+  });
   ipcMain.handle(IPC.logs, () => logRing.slice());
   ipcMain.handle(IPC.perfHistory, () => perfSamples);
   ipcMain.handle(IPC.perfControl, (_e, action: 'clear' | 'stop' | 'start') => {
@@ -1264,6 +1399,15 @@ function registerIpc(): void {
     }
   });
   ipcMain.on(IPC.meetPreview, (_e, key: string, jpeg: Uint8Array) => broadcast(IPC.preview, key, jpeg));
+  ipcMain.on(IPC.previewKeys, (e, keys: string[]) => {
+    const id = e.sender.id;
+    if (!previewWanted.has(id)) e.sender.once('destroyed', () => {
+      previewWanted.delete(id);
+      pushPreviewKeys();
+    });
+    previewWanted.set(id, Array.isArray(keys) ? keys : []);
+    pushPreviewKeys();
+  });
   ipcMain.on(IPC.meetDevices, (_e, d: DeviceLists) => {
     lastDevices = d;
     broadcast(IPC.devicesChanged, d);
@@ -1326,6 +1470,18 @@ async function runCliCommand(cmd: string): Promise<void> {
       const img = w && !w.isDestroyed() ? await w.webContents.capturePage() : null;
       if (img) fs.writeFileSync(path.join(ud, `${name}.png`), img.toPNG());
       log(img ? `snapshot saved: ${name}.png` : `snap-win: ${kind} window not open`);
+    } else if (cmd.startsWith('resize:')) {
+      // resize:<w>x<h> — main window size (layout checks)
+      const [w, hh] = cmd.slice(7).split('x').map(Number);
+      if (w && hh) controlWin?.setSize(w, hh);
+    } else if (cmd.startsWith('snap-display:')) {
+      // snap-display:<output name> — screenshot of that output's display window
+      const name = cmd.slice(13);
+      const o = settings.outputs.find((x) => x.name === name);
+      const w = o ? displayWins.get(o.id)?.win : undefined;
+      const img = w && !w.isDestroyed() ? await w.webContents.capturePage() : null;
+      if (img) fs.writeFileSync(path.join(ud, 'display-snap.png'), img.toPNG());
+      log(img ? 'snapshot saved: display-snap.png' : `snap-display: no display window for "${name}"`);
     } else if (cmd.startsWith('eval-win:')) {
       // eval-win:<kind>:<js> → eval-<kind>.txt
       const rest = cmd.slice(9);
@@ -1388,8 +1544,8 @@ if (!firstInstance) {
     restartApi();
     const w = ensureMeetWindow();
     if (IS_MOCK) {
-      log('MOCK MODE: loading static/mock-meet.html');
-      void w.loadFile(MOCK_PAGE);
+      log(`MOCK MODE: loading static/mock-meet.html${MOCK_QUERY ? `?${MOCK_QUERY}` : ''}`);
+      void w.loadURL(MOCK_URL);
     } else {
       void w.loadURL(MEET_HOME);
     }
@@ -1400,6 +1556,12 @@ if (!firstInstance) {
       broadcast(IPC.system, systemStats());
       samplePerf();
     }, 1000);
+    if (BENCH_OUT) startBench({ out: BENCH_OUT, meetWin: () => meetWin, state: () => lastState, log });
+    // Update check shortly after start, then every 6 h (never in benchmarks / mock runs).
+    if (!BENCH_OUT && !IS_MOCK) {
+      setTimeout(() => settings.checkForUpdates && void checkUpdates(), 15_000);
+      setInterval(() => settings.checkForUpdates && void checkUpdates(), 6 * 3600_000);
+    }
     const startCmd = cmdFromArgv(process.argv);
     if (startCmd) setTimeout(() => void runCliCommand(startCmd), 3000);
   });

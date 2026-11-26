@@ -15,7 +15,7 @@ export function multiviewTile(cfg0: OutputConfig): OutputView {
   well.el.addEventListener('dblclick', () => openEffects(id));
   const name = h('span.mv-name');
   const rec = recordingBadge();
-  const fx = iconButton('sliders', () => openEffects(id), 'Output Effects', 'mv-fx');
+  const fx = iconButton('sliders', () => openEffects(id), 'Output effects', 'mv-fx');
   const meters = audioIndicators();
   const mode = popup(MODE_OPTS, cfg0.mode, (v) => {
     const c = cfg();

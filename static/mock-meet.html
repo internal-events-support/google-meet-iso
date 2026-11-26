@@ -1,11 +1,19 @@
 <!doctype html>
 <!-- Mock of Google Meet's in-call DOM, used to test the capture/NDI pipeline without a
-     real meeting. Run with: npm run mock  (GMEET_ISO_MOCK=1). -->
+     real meeting. Run with: npm run mock  (GMEET_ISO_MOCK=1).
+     Query parameters (used by scripts/bench.js; all optional):
+       n=<count>        remote camera participants (default: the 3 built-in demo people)
+       w=, h=, fps=     camera resolution / frame rate (default 1280x720@30)
+       screen=0|1       add a 1920x1080 screen share
+       rtc=0|1          send each feed through a local WebRTC loopback so tiles carry real
+                        decoded video (I420/NV12 like Meet) instead of canvas frames
+       jank=<pct>       keep the page's main thread busy this % of the time (Meet's own JS)
+       leave=0|1        remove a participant after 20 s (default 1 without n=) -->
 <html>
 <head><meta charset="utf-8"><title>Mock Meet</title>
 <style>
   body { margin: 0; background: #202124; color: #fff; font: 14px sans-serif; }
-  #grid { display: grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; gap: 8px; padding: 8px; height: calc(100vh - 60px); }
+  #grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 8px; padding: 8px; height: calc(100vh - 60px); }
   .tile { position: relative; background: #3c4043; border-radius: 8px; overflow: hidden; }
   .tile video { width: 100%; height: 100%; object-fit: cover; }
   .name { position: absolute; left: 8px; bottom: 6px; }
@@ -20,13 +28,65 @@
   <span id="vis"></span>
 </footer>
 <script>
-  const people = [
-    { id: 'spaces/x/devices/101', name: 'Alice Anderson', color: '#e53935', w: 1280, h: 720 },
-    { id: 'spaces/x/devices/102', name: 'Bob Brown', color: '#43a047', w: 640, h: 360 },
-    { id: 'spaces/x/devices/103', name: 'Bob Brown (Presentation)', color: '#1e88e5', w: 1920, h: 1080 },
-    { id: 'spaces/x/devices/100', name: 'ISO Bot', color: '#555', w: 320, h: 180, self: true },
-    { id: 'spaces/x/devices/104', name: 'Carol (camera off)', off: true },
-  ];
+  const q = new URLSearchParams(location.search);
+  const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
+  const colors = ['#e53935', '#43a047', '#1e88e5', '#fb8c00', '#8e24aa', '#00897b', '#6d4c41', '#3949ab', '#c0ca33', '#d81b60', '#5e35b1', '#00acc1'];
+  let people;
+  if (q.has('n')) {
+    const W = num('w', 1280), H = num('h', 720);
+    people = [];
+    for (let i = 0; i < num('n', 4); i++) people.push({ id: `spaces/x/devices/${200 + i}`, name: `Person ${i + 1}`, color: colors[i % colors.length], w: W, h: H });
+    if (num('screen', 1)) people.push({ id: 'spaces/x/devices/290', name: 'Person 1 (Presentation)', color: '#1e88e5', w: 1920, h: 1080 });
+    people.push({ id: 'spaces/x/devices/100', name: 'ISO Bot', color: '#555', w: 320, h: 180, self: true });
+  } else {
+    people = [
+      { id: 'spaces/x/devices/101', name: 'Alice Anderson', color: '#e53935', w: 1280, h: 720 },
+      { id: 'spaces/x/devices/102', name: 'Bob Brown', color: '#43a047', w: 640, h: 360 },
+      { id: 'spaces/x/devices/103', name: 'Bob Brown (Presentation)', color: '#1e88e5', w: 1920, h: 1080 },
+      { id: 'spaces/x/devices/100', name: 'ISO Bot', color: '#555', w: 320, h: 180, self: true },
+      { id: 'spaces/x/devices/104', name: 'Carol (camera off)', off: true },
+    ];
+  }
+  const FPS = num('fps', 30);
+  const useRtc = num('rtc', 0) === 1;
+
+  /** Canvas test pattern: moving gradient bar + counter, so every frame differs. */
+  function feed(p) {
+    const c = document.createElement('canvas'); c.width = p.w; c.height = p.h;
+    const ctx = c.getContext('2d');
+    let t = 0;
+    setInterval(() => {
+      ctx.fillStyle = p.color; ctx.fillRect(0, 0, p.w, p.h);
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.fillRect(0, (t * 5) % p.h, p.w, p.h / 6);
+      ctx.fillStyle = '#fff'; ctx.font = `${Math.round(p.h / 8)}px sans-serif`;
+      ctx.fillText(`${p.name}  ${t++}`, 20, p.h / 2);
+      ctx.fillRect((t * 7) % p.w, p.h - 40, 40, 40);
+    }, 1000 / FPS);
+    return c.captureStream(FPS);
+  }
+
+  /** Local WebRTC loopback: encode + decode the feed so the <video> holds real decoded frames. */
+  async function loopback(stream, w, h) {
+    const a = new RTCPeerConnection();
+    const b = new RTCPeerConnection();
+    a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+    b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+    const out = new Promise((res) => (b.ontrack = (e) => res(new MediaStream([e.track]))));
+    const tx = a.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly' });
+    const vp8 = RTCRtpSender.getCapabilities('video').codecs.filter((c) => /VP8/i.test(c.mimeType));
+    if (vp8.length && tx.setCodecPreferences) tx.setCodecPreferences(vp8);
+    await a.setLocalDescription();
+    await b.setRemoteDescription(a.localDescription);
+    await b.setLocalDescription();
+    await a.setRemoteDescription(b.localDescription);
+    const params = tx.sender.getParameters();
+    params.encodings = [{ maxBitrate: Math.round(w * h * FPS * 0.15), maxFramerate: FPS, scaleResolutionDownBy: 1 }];
+    params.degradationPreference = 'maintain-resolution';
+    await tx.sender.setParameters(params).catch(() => {});
+    return out;
+  }
+
   const grid = document.getElementById('grid');
   for (const p of people) {
     const tile = document.createElement('div');
@@ -36,19 +96,12 @@
     name.className = 'name';
     if (p.self) { const s = document.createElement('span'); s.setAttribute('data-self-name', p.name); s.textContent = 'You'; name.appendChild(s); }
     else { const s = document.createElement('span'); s.className = 'notranslate'; s.textContent = p.name; name.appendChild(s); }
-    if (!p.off) {
-      const c = document.createElement('canvas'); c.width = p.w; c.height = p.h;
-      const ctx = c.getContext('2d');
-      let t = 0;
-      setInterval(() => {
-        ctx.fillStyle = p.color; ctx.fillRect(0, 0, p.w, p.h);
-        ctx.fillStyle = '#fff'; ctx.font = `${Math.round(p.h / 8)}px sans-serif`;
-        ctx.fillText(`${p.name}  ${t++}`, 20, p.h / 2);
-        ctx.fillRect((t * 7) % p.w, p.h - 40, 40, 40);
-      }, 33);
+    if (!p.off && !(p.self && q.has('n'))) {
       const v = document.createElement('video');
       v.muted = true; v.autoplay = true; v.playsInline = true;
-      v.srcObject = c.captureStream(30);
+      const src = feed(p);
+      if (useRtc) loopback(src, p.w, p.h).then((s) => (v.srcObject = s));
+      else v.srcObject = src;
       tile.appendChild(v);
     }
     tile.appendChild(name);
@@ -72,8 +125,13 @@
     });
   }
   setInterval(() => { document.getElementById('vis').textContent = document.visibilityState; }, 500);
+  // Synthetic Meet main-thread load: busy-wait `jank`% of every 100 ms, in one block.
+  const jank = num('jank', 0);
+  if (jank > 0) {
+    setInterval(() => { const end = performance.now() + jank; while (performance.now() < end) {} }, 100);
+  }
   // Simulate a participant leaving after 20s.
-  setTimeout(() => document.querySelector('[data-participant-id="spaces/x/devices/102"]')?.remove(), 20000);
+  if (num('leave', q.has('n') ? 0 : 1)) setTimeout(() => document.querySelector('[data-participant-id="spaces/x/devices/102"]')?.remove(), 20000);
 </script>
 </body>
 </html>

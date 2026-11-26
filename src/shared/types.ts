@@ -669,6 +669,10 @@ export interface Settings {
   /** HTTP + WebSocket API on localhost. */
   apiEnabled: boolean;
   apiPort: number;
+  /** HTTP/WebSocket API reachable from other devices (else this computer only). */
+  apiAllowRemote: boolean;
+  /** Look for a newer release on start and every few hours. */
+  checkForUpdates: boolean;
   /** NDI network: discovery server ("host:port", '' = mDNS) and NIC IPs (comma separated). */
   ndiDiscoveryServer: string;
   ndiNicIps: string;
@@ -729,7 +733,7 @@ export const DEFAULT_SETTINGS: Settings = {
   meetWindowHeight: 1440,
   camera: { type: 'none', name: '' },
   micLabel: '',
-  previewFps: 8,
+  previewFps: 15,
   lastMeetUrl: '',
   recentMeetUrls: [],
   botName: '',
@@ -746,6 +750,8 @@ export const DEFAULT_SETTINGS: Settings = {
   oscReplyPort: 9098,
   apiEnabled: true,
   apiPort: 8787,
+  apiAllowRemote: false,
+  checkForUpdates: true,
   ndiDiscoveryServer: '',
   ndiNicIps: '',
   recordDir: '',
@@ -862,6 +868,11 @@ export interface OutputState {
   latencyMs: number;
   /** ms spent rendering one output frame (draw + readback); 0 for passthrough. */
   cycleMs?: number;
+  /** Native NDI sender counters (cumulative): frames handed in, frames sent, late cadence ticks, overwritten frames. */
+  nativeSubmitted?: number;
+  nativeSent?: number;
+  nativeLate?: number;
+  nativeDropped?: number;
   audioLevel: number;
   recording: boolean;
   recordFile: string;
@@ -904,6 +915,8 @@ export interface MeetState {
   /** [audio-agent] Audio Outputs: per-device channel peaks (0..1) and the device's real channel count. */
   audioOutputMeters?: Record<string, number[]>;
   audioOutputChannels?: Record<string, number>;
+  /** Benchmark mode only: Meet page main-thread timer lag over the last 2 s, and WebGL contexts lost so far. */
+  bench?: { lagP95: number; lagMax: number; glContextsLost: number };
   updatedAt: number;
 }
 
@@ -918,6 +931,22 @@ export interface SystemStats {
   nics?: { name: string; address: string }[];
   /** Free/total space on the recording drive. */
   disk?: { freeGB: number; totalGB: number; path: string } | null;
+  /** Saved settings that only take effect after a restart (NDI network). */
+  restartNeeded?: boolean;
+  /** Latest update check. */
+  update?: UpdateInfo;
+  /** HTTP/WebSocket API addresses (empty when the API is off). */
+  apiUrls?: string[];
+}
+
+export interface UpdateInfo {
+  status: 'idle' | 'checking' | 'current' | 'available' | 'unavailable' | 'error';
+  current: string;
+  latest?: string;
+  /** Release page to download from. */
+  url?: string;
+  checkedAt?: number;
+  message?: string;
 }
 
 export interface DeviceLists {
@@ -940,6 +969,8 @@ export interface ControlApi {
   onState(cb: (s: MeetState) => void): void;
   onLog(cb: (line: string) => void): void;
   onPreview(cb: (key: string, jpeg: ArrayBuffer) => void): void;
+  /** Preview keys this window is showing right now (visible elements only); previews nobody shows aren't encoded. */
+  setPreviewKeys?(keys: string[]): void;
   onDevices(cb: (d: DeviceLists) => void): void;
   command(c: Command): Promise<unknown>;
   pickFile(kind: 'image' | 'show-open' | 'show-save' | 'folder'): Promise<string | null>;
@@ -947,8 +978,20 @@ export interface ControlApi {
   system(): Promise<SystemStats>;
   /** Settings changed elsewhere (OSC, API, show file). */
   onSettings(cb: (s: Settings) => void): void;
-  /** Open (or focus) a secondary window. `arg` is passed as ?arg= (e.g. output id). */
+  /** Open (or focus) a secondary window. `arg` is passed as ?arg= (e.g. output id). Settings opens as a dialog in the main window. */
   openWindow(kind: WindowKind, arg?: string): Promise<void>;
+  /** Settings in its own window (pop out of the dialog). */
+  popOutSettings?(arg?: string): Promise<void>;
+  /** Main window: open the Settings dialog (menu, shortcuts, other windows). */
+  onOpenSettings?(cb: (arg: string) => void): void;
+  /** Custom title bar buttons. */
+  windowAction?(a: 'minimize' | 'maximize' | 'close'): void;
+  onWindowState?(cb: (s: { maximized: boolean }) => void): void;
+  /** Relaunch the app (leaves the call cleanly first). */
+  restartApp?(): Promise<void>;
+  checkUpdates?(): Promise<UpdateInfo>;
+  /** Open a release page in the default browser (GitHub URLs only). */
+  openExternal?(url: string): Promise<void>;
   /** Recent log lines (for windows opened later). */
   logs(): Promise<string[]>;
   /** Performance samples recorded by main (1 Hz, last 30 min). */
@@ -988,6 +1031,13 @@ export const IPC = {
   pickFile: 'ctl:pickFile',
   system: 'ctl:system',
   openWindow: 'ctl:openWindow',
+  popOutSettings: 'ctl:popOutSettings',
+  openSettings: 'ctl:openSettings',
+  windowAction: 'ctl:windowAction',
+  windowState: 'ctl:windowState',
+  restartApp: 'ctl:restartApp',
+  checkUpdates: 'ctl:checkUpdates',
+  openExternal: 'ctl:openExternal',
   logs: 'ctl:logs',
   perfHistory: 'ctl:perfHistory',
   perfControl: 'ctl:perfControl',
@@ -998,6 +1048,7 @@ export const IPC = {
   state: 'ctl:state',
   log: 'ctl:log',
   preview: 'ctl:preview',
+  previewKeys: 'ctl:previewKeys',
   devicesChanged: 'ctl:devicesChanged',
   // meet preload <-> main
   meetState: 'meet:state',
@@ -1007,6 +1058,7 @@ export const IPC = {
   meetDumpResult: 'meet:dumpResult',
   meetGetSettings: 'meet:getSettings',
   meetPreview: 'meet:preview',
+  meetPreviewKeys: 'meet:previewKeys',
   meetDevices: 'meet:devices',
   meetSetCam: 'meet:setCam',
   meetSetMic: 'meet:setMic',
@@ -1047,7 +1099,7 @@ export const APP_SCREEN_OPTIONS: OptionItem<'meeting' | 'video' | 'audio' | 'par
 ];
 
 /** ApplicationSettingsTab: Settings window sidebar (openWindow('settings', <value>) selects one). */
-export type SettingsTab = 'general' | 'inMeeting' | 'outputEffects' | 'videoLoss' | 'audioInputsAndTalkback' | 'ndiAndSrt' | 'osc' | 'recording' | 'logs';
+export type SettingsTab = 'general' | 'inMeeting' | 'outputEffects' | 'videoLoss' | 'audioInputsAndTalkback' | 'ndiAndSrt' | 'osc' | 'recording' | 'account' | 'shortcuts' | 'updates' | 'logs';
 export const SETTINGS_TAB_OPTIONS: OptionItem<SettingsTab>[] = [
   { value: 'general', label: 'General Settings' },
   { value: 'inMeeting', label: 'In Meeting' },

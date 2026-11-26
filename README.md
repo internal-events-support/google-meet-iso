@@ -44,15 +44,22 @@ Control UI ─ IPC ─ main process ─┬─ OSC server (udp 9099)        ┐ a
                                  ├─ show files, NDI config, display-output windows
                                  └─ hidden Meet client (offscreen BrowserWindow)
                                      ├─ main world: media shim + RTC observer (inject.ts)
-                                     └─ preload (Node + native NDI addon)
-                                         dom.ts      tiles, names, join flow, layout, chat, admit, mute
-                                         sources.ts  one SourceTap per tile: MediaStreamTrackProcessor
-                                         outputs.ts  output slots: routing target → passthrough or
-                                                     canvas render (scale/effects/name tag/loss) → NDI
-                                         audio.ts    remote audio tracks → 48 kHz mix + per-track ISO
-                                         speaker.ts  CSRC levels → active speaker, CSRC→participant
-                                         recorder.ts WebCodecs H.264/AAC → fragmented MP4
-                                         camsource.ts NDI/webcam → the bot's virtual camera
+                                     ├─ preload (Node + native NDI addon)
+                                     │   dom.ts      tiles, names, join flow, layout, chat, admit, mute
+                                     │   sources.ts  one SourceTap per tile: hands its track to the engine
+                                     │   outputs.ts  output slots: routing, NDI sender (zero-copy hand-off,
+                                     │               cadence clock), embedded audio, recorder, state
+                                     │   audio.ts    remote audio tracks → 48 kHz mix + per-track ISO
+                                     │   speaker.ts  CSRC levels → active speaker, CSRC→participant
+                                     │   recorder.ts WebCodecs H.264/AAC → fragmented MP4
+                                     │   camsource.ts NDI/webcam → the bot's virtual camera
+                                     └─ render worker (engine-worker.ts; in-page fallback)
+                                         engine.ts   latest frame per participant, one renderer per output,
+                                                     preview JPEGs
+                                         render.ts   passthrough or composed render (scale/effects/
+                                                     name tag/loss) → packed buffer for NDI
+                                         gpucompositor.ts / compositor.ts  one shared WebGPU device
+                                                     (async readback), else one shared WebGL2 context
 ```
 
 - **No official API.** The Meet Media API is closed to new signups, caps video at 3
@@ -64,6 +71,16 @@ Control UI ─ IPC ─ main process ─┬─ OSC server (udp 9099)        ┐ a
   three tiles.
 - **Tiled layout.** On join the bot sets More options → Adjust view → Tiled with the max
   tile count, so Meet renders (and sends video for) everyone.
+- **Render worker.** Participant tracks are read in a worker (MediaStreamTrackProcessor on a
+  cloned track, readable transferred), and all compositing, GPU readback and preview encoding
+  happens there, so Meet's own main-thread work can't stall output frames. Finished frames
+  come back to the page as transferred buffers and go to the native sender without a copy
+  (`sendVideoOwned`); the sender hands them back once sent.
+- **One GPU compositor.** Every output shares one WebGPU device (WGSL effects, UYVY packing in a
+  compute pass, `mapAsync` readback that never blocks the thread). Without WebGPU, one shared
+  WebGL2 context is used, so outputs never run into Chromium's ~16-context limit.
+- **Previews only when shown.** The UI reports which preview images are visible; nothing else
+  is encoded. Output previews are made from the NDI readback already on the CPU.
 - **Fixed-format outputs** render on a drift-corrected clock. When nothing changed (the source
   is slower than the output rate, or the loss content is static), the last frame is re-sent
   without another GPU readback. Measured at a receiver: a steady 30.0 fps from 20–28 fps
@@ -96,7 +113,7 @@ ZoomOSC-style `/zoom/`:
 
 `out` is a 1-based index, an output id, or an output name.
 
-**HTTP / WebSocket** (127.0.0.1:8787): `GET /api/state`, `/api/outputs`, `/api/participants`;
+**HTTP / WebSocket** (127.0.0.1:8787; turn on *Allow other devices* in Settings → Remote control to reach it from other computers, there is no password): `GET /api/state`, `/api/outputs`, `/api/participants`;
 `POST /api/command` with a command JSON, e.g.
 `{"cmd":"route","output":1,"participant":"Alice"}`, `{"cmd":"engine","state":"standby"}`.
 `ws://127.0.0.1:8787/ws` pushes state every 500 ms and accepts the same command JSON. The
@@ -129,7 +146,30 @@ while recording). They run at the source's real frame rate (variable).
 ```bash
 npm run mock          # fake Meet DOM (static/mock-meet.html) in the hidden window
 npm run verify:ndi    # discovers GMEET sources and receives one frame from each
+node scripts/test-sender.js           # native sender/receiver: zero-copy, cadence, UYVY receive
+node scripts/grab-ndi.js BENCH        # save one frame of each matching NDI source as a BMP
+bash scripts/check-fallbacks.sh       # every engine path (worker/page × WebGPU/WebGL2) → frames to eyeball
 ```
+
+Switches for testing the fallbacks: `GMEET_ISO_RENDER_WORKER=0` (render in the page),
+`GMEET_ISO_WEBGPU=0` (WebGL2 compositor).
+
+### Performance benchmark
+
+`npm run bench` runs the app against the mock meeting (real WebRTC-decoded video) in fixed
+scenarios and reports CPU cores, GPU engine load, Meet main-thread lag, delivered unique fps,
+per-frame cost and lost GPU contexts. Each run uses a throwaway profile under `tmp/bench`, so
+your settings and sign-in are untouched, and NDI sources are named `BENCH …`.
+
+```bash
+npm run bench -- --only=canvas6,jank --runs=2 --label=mine
+npm run bench -- --ab=../other-checkout --runs=3    # interleaved A/B against another build
+npm run bench -- --only=canvas10 --profile=25       # + top main-thread functions (CPU profile)
+npm run bench -- --serve=display                    # run a scenario live for inspection
+```
+
+Scenarios: `canvas6` (6 × 1080p outputs with effects), `canvas10`, `jank` (Meet's main thread
+40% busy), `passthrough`, `display` (two display windows), `autocrop` (face tracking on).
 
 ## Dev / automation commands
 
@@ -155,4 +195,6 @@ The app also writes `state.json` (live state) and `devices.json` there.
   speakers are ever available, a Meet web-client limit.
 - Host tools (mute others, admit) only work if the bot account is a host / co-host.
 - NDI network changes (discovery server / NICs) apply after restarting the app.
+- Output auto-crop (face tracking) needs Chromium's Shape Detection API, which this Electron
+  only exposes behind its experimental web features: start with `GMEET_ISO_EXPERIMENTAL_WEB=1`.
 - No installer yet (electron-builder with `asarUnpack` for `build/Release/*.node`).

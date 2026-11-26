@@ -14,7 +14,8 @@
     "icons": "electron scripts/build-icons.js",
     "build:ui": "node scripts/build-ui.js",
     "watch:ui": "node scripts/build-ui.js --watch",
-    "dist": "npm run build && electron-builder --win --publish never"
+    "dist": "npm run build && electron-builder --win --publish never",
+    "bench": "npm run build:ts && npm run build:ui && node scripts/bench.js"
   },
   "license": "UNLICENSED",
   "type": "commonjs",

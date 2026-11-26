@@ -6,7 +6,7 @@
 
 import type { OutputConfig, OutputState } from '../../shared/types';
 import { h, icon, iconButton, meterV, popup, toggle } from '../kit';
-import { bindPreview, updateOutput } from '../store';
+import { bindPreviewCanvas, updateOutput } from '../store';
 import {
   addOutput, AUDIO_OPTS, cfgById, deviceModel, FORMAT_OPTS, formatValue, MODE_OPTS, openEffects, outputMenu,
   quickActions, renameOutput, selectionModel, setDevice, setFormat, setMode, setSelection, statusLine,
@@ -20,13 +20,13 @@ export interface OutputView {
 
 /** ZISOStreamVideoView: live preview well bound to an output id. */
 export function previewWell(id: string) {
-  const img = h('img', { alt: '', draggable: false }) as HTMLImageElement;
+  // Canvas, not <img>: frames are shown without re-rasterising the page (see bindPreviewCanvas).
+  const img = h('canvas') as HTMLCanvasElement;
   const msg = h('div.well-msg');
   const el = h('div.well.vo-well', img, msg);
   let got = false;
-  const unbind = bindPreview(id, (url) => {
+  const unbind = bindPreviewCanvas(id, img, () => {
     if (img.hidden) return;
-    img.src = url;
     if (!got) {
       got = true;
       el.classList.add('has-frame');
@@ -39,7 +39,6 @@ export function previewWell(id: string) {
       const off = !cfg.enabled || !st || st.status === 'off';
       img.hidden = off;
       if (off && got) {
-        img.removeAttribute('src');
         got = false;
         el.classList.remove('has-frame');
       }
@@ -92,8 +91,8 @@ export function gridCard(cfg0: OutputConfig): OutputView {
     if (c) void renameOutput(c);
   });
   const rec = recordingBadge();
-  const enabled = toggle(cfg0.enabled, (v) => void updateOutput(id, { enabled: v }), { cls: 'sm', title: 'Video Output is enabled' });
-  const fx = iconButton('sliders', () => openEffects(id), 'Output Effects', 'vo-fx');
+  const enabled = toggle(cfg0.enabled, (v) => void updateOutput(id, { enabled: v }), { cls: 'sm', title: 'Video output is enabled' });
+  const fx = iconButton('sliders', () => openEffects(id), 'Output effects', 'vo-fx');
   const more = iconButton('ellipsis', () => outputMenu(more, cfg), 'Options', 'vo-more');
   const header = h('div.vo-head', h('span.vo-title', name, rec.el), h('span.vo-head-r', enabled.el, fx, more));
 
@@ -117,19 +116,19 @@ export function gridCard(cfg0: OutputConfig): OutputView {
   const device = popup([], 'ndi', (v) => {
     const c = cfg();
     if (c) setDevice(c, v);
-  }, { title: 'Output Device' });
+  }, { title: 'Output device' });
   const format = popup(FORMAT_OPTS, formatValue(cfg0), (v) => {
     const c = cfg();
     if (c) setFormat(c, v);
   }, { title: 'Format' });
-  const audio = popup(AUDIO_OPTS, cfg0.audio, (v) => void updateOutput(id, { audio: v as OutputConfig['audio'] }), { title: 'Embedded Audio' });
+  const audio = popup(AUDIO_OPTS, cfg0.audio, (v) => void updateOutput(id, { audio: v as OutputConfig['audio'] }), { title: 'Embedded audio' });
 
   const el = h('div.vo-card', { dataset: { id } },
     header,
     prev,
     h('div.vo-row.two', mode.el, sel.el),
     h('div.vo-row.status', status.el, qa.el),
-    h('div.vo-row.three', field(device.el, 'Output Device'), field(format.el, 'Format'), field(audio.el, 'Embedded Audio')));
+    h('div.vo-row.three', field(device.el, 'Output device'), field(format.el, 'Format'), field(audio.el, 'Embedded audio')));
 
   return {
     el,
@@ -157,7 +156,7 @@ export function gridCard(cfg0: OutputConfig): OutputView {
 
 /** Empty grid slot with a big "+" (Add Output). */
 export function addTile(): HTMLElement {
-  const b = h('button.vo-add-btn', { title: 'Add Output' }, icon('plus'));
+  const b = h('button.vo-add-btn', { title: 'Add output' }, icon('plus'));
   b.addEventListener('click', addOutput);
   return h('div.vo-add', b);
 }

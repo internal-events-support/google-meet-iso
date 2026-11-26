@@ -1,6 +1,6 @@
 // OSC settings category: Settings | Logs | Commands sub-tabs (RE OSCSettings / OSCMainSettings / CommandBrowserView).
 import { h, icon, promptSheet } from '../kit';
-import { store, run } from '../store';
+import { store, run, setSettings } from '../store';
 import { OSC_BAUD_RATE_OPTIONS, OSC_SUBSCRIBE_MODE_OPTIONS, type OptionItem } from '../../shared/types';
 import { OSC_CATALOG } from './oscCatalog';
 import { OSC_SUPPORT } from '../../shared/oscSupport';
@@ -23,8 +23,8 @@ export function oscPane(rerender: () => void): { el: HTMLElement; dispose(): voi
   const tabs = seg(
     [
       { value: 'settings', label: 'Settings' },
-      { value: 'logs', label: 'Logs' },
-      { value: 'commands', label: 'Commands' },
+      { value: 'logs', label: 'OSC log' },
+      { value: 'commands', label: 'OSC commands' },
     ],
     sub,
     (v) => {
@@ -63,25 +63,21 @@ function oscSettings(): HTMLElement {
 
   const listInfo = o.allowList.length ? `${o.allowList.length} address${o.allowList.length === 1 ? '' : 'es'}${o.allowListPath ? ` · ${o.allowListPath}` : ''}` : 'Empty';
 
-  return section('OSC settings', [
-    row('Enable OSC', tog(o.enabled, (v) => void patchGroup('osc', { enabled: v })), { title: 'When enabled, the application will listen for incoming commands and transmit outgoing commands' }),
-    row('Transmission IP', field(o.host, (v) => void patchGroup('osc', { host: v.trim() }), { cls: 'wide right' }), {
-      info: 'The IP address where Google Meet ISO will send outgoing commands',
+  return h('div', apiSection(), section('OSC', [
+    row('Enable OSC', tog(o.enabled, (v) => void patchGroup('osc', { enabled: v })), { hint: 'Listen for commands and send replies and events' }),
+    row('Send to', field(o.host, (v) => void patchGroup('osc', { host: v.trim() }), { cls: 'wide right' }), {
+      hint: 'IP address that gets replies and events',
     }),
-    row('Transmission port', numField(o.txPort, (v) => void patchGroup('osc', { txPort: v }), { min: 1, max: 65535, cls: 'wide right' }), {
-      title: 'The network port where Google Meet ISO will send outgoing commands',
+    row('Send port', numField(o.txPort, (v) => void patchGroup('osc', { txPort: v }), { min: 1, max: 65535, cls: 'wide right' })),
+    row('Receive port', numField(o.rxPort, (v) => void patchGroup('osc', { rxPort: v }), { min: 1, max: 65535, cls: 'wide right' })),
+    row('Listen on', pick(ifaces, o.interface, (v) => void patchGroup('osc', { interface: v })), {
+      hint: 'Network adapter for incoming commands',
     }),
-    row('Receiving port', numField(o.rxPort, (v) => void patchGroup('osc', { rxPort: v }), { min: 1, max: 65535, cls: 'wide right' }), {
-      title: 'The network port where Google Meet ISO will listen for incoming messages',
-    }),
-    row('Listen to interface', pick(ifaces, o.interface, (v) => void patchGroup('osc', { interface: v })), {
-      title: 'Select the network interface to use for incoming commands, or "All" for all interfaces.',
-    }),
-    row('OSC control allow list', [h('span.s-dim', listInfo), tog(o.enableAllowList, (v) => void patchGroup('osc', { enableAllowList: v }))], {
-      title: 'Restrict which devices are allowed to send OSC commands to Google Meet ISO via a list of IP addresses. Google Meet ISO will only allow control from these IPs on the selected interface(s).',
+    row('Allow list', [h('span.s-dim', listInfo), tog(o.enableAllowList, (v) => void patchGroup('osc', { enableAllowList: v }))], {
+      hint: 'Only accept commands from these IP addresses',
     }),
     row(
-      'Upload OSC allow list',
+      'Allow list addresses',
       [
         fileInput,
         allowListFile ? sbtn('Reload', () => allowListFile && void loadFile(allowListFile), { title: `Reload ${allowListFile.name}` }) : null,
@@ -91,16 +87,42 @@ function oscSettings(): HTMLElement {
         }),
         sbtn('Browse', () => fileInput.click()),
       ],
-      { title: 'Configure a .txt file containing the IP addresses to use for the Allow List, one per-line.' },
+      { hint: 'A .txt file with one IP address per line, or type them in' },
     ),
-    row('OSC baud rate', pick(OSC_BAUD_RATE_OPTIONS, o.baudRate, (v) => void patchGroup('osc', { baudRate: v })), { title: 'The maximum speed Google Meet ISO will transmit OSC messages' }),
-    row('OSC address header', field(o.prepend, (v) => void patchGroup('osc', { prepend: v.trim() ? '/' + v.trim().replace(/^\/+/, '') : '' }), { placeholder: '/gmeetosc', cls: 'wide right' }), {
-      title: "Customize the prefix string on Google Meet ISO's OSC outputs to differentiate between devices sending to the same receiver",
+    row('Send rate', pick(OSC_BAUD_RATE_OPTIONS, o.baudRate, (v) => void patchGroup('osc', { baudRate: v })), { hint: 'Fastest rate replies and events are sent at' }),
+    row('Address prefix', field(o.prepend, (v) => void patchGroup('osc', { prepend: v.trim() ? '/' + v.trim().replace(/^\/+/, '') : '' }), { placeholder: '/gmeetosc', cls: 'wide right' }), {
+      hint: 'Tells several apps apart when they send to the same receiver',
     }),
-    row('Subscribe to', pick(OSC_SUBSCRIBE_MODE_OPTIONS, o.subscribeMode, (v) => void patchGroup('osc', { subscribeMode: v })), {
-      title: 'Determine which group of participants to monitor for sending out OSC events',
+    row('Send events for', pick(OSC_SUBSCRIBE_MODE_OPTIONS, o.subscribeMode, (v) => void patchGroup('osc', { subscribeMode: v })), {
+      hint: 'Which participants to report changes for',
     }),
-  ]);
+  ]));
+}
+
+/** HTTP + WebSocket API (Presentation Player's "Remote control"). */
+function apiSection(): HTMLElement {
+  const s = store.settings;
+  const urls = store.system?.apiUrls ?? [];
+  const copy = (u: string) => {
+    const b = sbtn('Copy', () => {
+      void navigator.clipboard?.writeText(u);
+      b.textContent = 'Copied';
+      setTimeout(() => (b.textContent = 'Copy'), 1200);
+    });
+    return h('div.s-url', u, b);
+  };
+  return section(
+    'HTTP and WebSocket API',
+    [
+      row('Enable the API', tog(s.apiEnabled, (v) => void setSettings({ apiEnabled: v })), { hint: 'Same commands as OSC, as JSON (GET /api/state, POST /api/command, /ws)' }),
+      row('Allow other devices', tog(s.apiAllowRemote, (v) => void setSettings({ apiAllowRemote: v }), !s.apiEnabled), {
+        hint: 'Off = only this computer can use it. There is no password, so only turn this on for a trusted network.',
+      }),
+      row('Port', numField(s.apiPort, (v) => void setSettings({ apiPort: v }), { min: 1024, max: 65535, cls: 'wide right' })),
+      row('Addresses', urls.length ? h('div.s-urls', ...urls.map(copy)) : h('span.s-dim', 'API is off')),
+    ],
+    { subtitle: 'Control the app from a Stream Deck, Companion, a script or another computer.' },
+  );
 }
 
 // ---------------------------------------------------------------- Command Browser

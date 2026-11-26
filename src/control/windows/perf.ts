@@ -7,6 +7,7 @@ import type { PerfSample } from '../../shared/types';
 import { OUTPUT_METRIC_OPTIONS, PERF_SECTION_OPTIONS, SYSTEM_METRIC_OPTIONS } from '../../shared/types';
 import { button, h, icon, segmented } from '../kit';
 import { api, initStore, store } from '../store';
+import { installWindowChrome } from '../chrome';
 
 type Section = 'outputs' | 'system';
 type Pt = { t: number; v: number | null };
@@ -209,11 +210,11 @@ function window_(key: string): [number, number] {
 // Outputs section
 type OutMetric = (typeof OUTPUT_METRIC_OPTIONS)[number]['value'];
 const OUT_TITLES: Record<OutMetric, string> = {
-  incomingResolution: 'Incoming Resolution',
+  incomingResolution: 'Incoming resolution',
   incomingFrameRate: 'Incoming frame rate',
   engineCycleTime: 'Engine cycle time',
   engineLatency: 'Engine latency',
-  outgoingResolution: 'Outgoing Resolution',
+  outgoingResolution: 'Outgoing resolution',
   outgoingFrameRate: 'Outgoing frame rate',
 };
 type OutSample = PerfSample['outputs'][number];
@@ -460,6 +461,7 @@ async function poll(): Promise<void> {
 }
 
 void initStore().then(async () => {
+  installWindowChrome();
   const app = document.getElementById('app')!;
   statusEl = h('span.pf-status');
   const nav = segmented(PERF_SECTION_OPTIONS.map((o) => ({ value: o.value, label: o.label })), section, (v) => {
@@ -476,7 +478,7 @@ void initStore().then(async () => {
     ranges.clear();
     void poll();
   }, 'pf-tb');
-  const exportBtn = button('Export Data', exportCsv, 'pf-tb');
+  const exportBtn = button('Export data', exportCsv, 'pf-tb');
   const toolbar = h('div.pf-toolbar', h('div.pf-tl', statusEl), h('div.pf-tc', nav.el), h('div.pf-tr', stopBtn, clearBtn, exportBtn));
   outputsEl = buildOutputs();
   sysBuilt = buildSystem();

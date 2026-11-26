@@ -1,10 +1,11 @@
-// App shell: unified top bar (capture engine, tabs, recording, settings, account),
+// App shell: unified top bar (tabs, recording, settings; the Google account is in Settings),
 // tab host and the bottom Return Feed / system bar. Tabs mount lazily into the host.
 
 import type { CameraSource } from '../shared/types';
-import { button, h, icon, popover, popup, segmented, textField, toggle, type OptList } from './kit';
+import { button, confirmSheet, h, icon, popup, segmented, type OptList } from './kit';
+import { openSettingsDialog, windowButtons } from './chrome';
 import { openRecordingPopover } from './recording';
-import { api, bindPreview, inCall, on, run, setSettings, store } from './store';
+import { api, bindPreviewCanvas, inCall, on, run, setSettings, store } from './store';
 import { mountAudio } from './tabs/audio';
 import { mountMeeting } from './tabs/meeting';
 import { mountParticipants } from './tabs/participants';
@@ -13,8 +14,8 @@ import { mountVideo } from './tabs/video';
 export type TabId = 'meeting' | 'video' | 'audio' | 'participants';
 const TABS: { id: TabId; label: string; mount: (host: HTMLElement) => void }[] = [
   { id: 'meeting', label: 'Meeting', mount: mountMeeting },
-  { id: 'video', label: 'Video Outputs', mount: mountVideo },
-  { id: 'audio', label: 'Audio Outputs', mount: mountAudio },
+  { id: 'video', label: 'Video outputs', mount: mountVideo },
+  { id: 'audio', label: 'Audio outputs', mount: mountAudio },
   { id: 'participants', label: 'Participants', mount: mountParticipants },
 ];
 
@@ -40,17 +41,101 @@ export function currentTab(): TabId {
 }
 
 // ---------------------------------------------------------------------------
-function topBar(): HTMLElement {
-  nav = segmented(TABS.map((t) => ({ value: t.id, label: t.label })), current, (v) => showTab(v as TabId));
+/** Pill button: icon + label (the label hides in narrow windows, see shell.css). */
+function pill(ic: string, label: string, cls = ''): HTMLButtonElement {
+  return h('button.btn.pill' + cls, { type: 'button', title: label }, icon(ic), h('span.pill-label', label)) as HTMLButtonElement;
+}
 
-  // Recording button: "Configure Recording" ↔ red running pill with timer.
-  const recLabel = h('span', 'Configure Recording');
-  const recBtn = h('button.btn.pill.rec-pill', icon('record'), recLabel) as HTMLButtonElement;
+/** Meeting code from a Meet URL ("abc-defg-hij"), or ''. */
+function meetingCode(url: string | undefined): string {
+  const m = /meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/i.exec(url ?? '');
+  return m ? m[1] : '';
+}
+
+/**
+ * Top bar, like Presentation Player's: app name · what's going on (meeting code + status
+ * caption) · warning pills for things that need you, Recording, Settings, window buttons.
+ * The tabs sit in their own row below, so nothing collides in narrow windows.
+ */
+function topBar(): HTMLElement {
+  // Centre: meeting context
+  const title = h('h1.ctx-title');
+  const meta = h('span.caption.ctx-meta');
+  const copyBtn = h('button.btn.btn-plain.icon-only.ctx-copy', { type: 'button', title: 'Copy meeting link', 'aria-label': 'Copy meeting link' }, icon('copy')) as HTMLButtonElement;
+  copyBtn.addEventListener('click', () => {
+    const url = store.state?.url;
+    if (!url) return;
+    void navigator.clipboard?.writeText(url);
+    copyBtn.title = 'Copied';
+    setTimeout(() => (copyBtn.title = 'Copy meeting link'), 1500);
+  });
+  const ctx = h('div.ctx', h('div.ctx-row', title, copyBtn), meta);
+  const renderCtx = () => {
+    const st = store.state;
+    const phase = st?.phase ?? 'loading';
+    const code = meetingCode(st?.url);
+    const inMeeting = !!code && ['in-call', 'waiting', 'green-room'].includes(phase);
+    const active = ['in-call', 'waiting', 'green-room'].includes(phase);
+    title.textContent = inMeeting ? code : active ? 'In a meeting' : 'No meeting';
+    copyBtn.hidden = !inMeeting;
+    const people = (st?.participants ?? []).filter((p) => !p.isSelf).length;
+    const since = st?.inCallSince ?? 0;
+    const parts: string[] = [];
+    switch (phase) {
+      case 'in-call':
+        parts.push('In call');
+        if (since) parts.push(fmt(Date.now() - since));
+        parts.push(`${people} participant${people === 1 ? '' : 's'}`);
+        break;
+      case 'waiting': parts.push('Waiting to be let in'); break;
+      case 'green-room': parts.push('Joining…'); break;
+      case 'signed-out': parts.push('Signed out'); break;
+      case 'denied': parts.push('Not let in'); break;
+      case 'ended': parts.push('Call ended'); break;
+      case 'loading': parts.push('Starting…'); break;
+      default: parts.push('Ready to join');
+    }
+    meta.textContent = parts.join(' · ');
+  };
+  on('state', renderCtx);
+  setInterval(renderCtx, 1000);
+
+  // Warning pills (only when something needs you), as in Presentation Player.
+  const signInAgain = pill('warn', 'Sign in again', '.warn');
+  signInAgain.addEventListener('click', () => void api.signIn());
+  const ndiWarn = pill('warn', 'NDI not available', '.warn.chip');
+  ndiWarn.addEventListener('click', () => openSettingsDialog('ndi'));
+  const restartDue = pill('refresh', 'Restart to apply', '.warn');
+  restartDue.addEventListener('click', async () => {
+    const inMeeting = ['in-call', 'waiting', 'green-room'].includes(store.state?.phase ?? '');
+    const ok = await confirmSheet('Restart now?', `NDI network changes apply after a restart.${inMeeting ? ' The bot leaves the meeting and you need to join again.' : ''}`, 'Restart', inMeeting);
+    if (ok) void api.restartApp?.();
+  });
+  const updateReady = pill('download', 'Update');
+  updateReady.addEventListener('click', () => openSettingsDialog('updates'));
+  const renderPills = () => {
+    const st = store.state;
+    const sy = store.system;
+    signInAgain.hidden = st?.phase !== 'signed-out' || !store.settings.botName;
+    ndiWarn.hidden = !st || st.ndi?.ok !== false;
+    ndiWarn.title = st?.ndi?.error ? `NDI not available: ${st.ndi.error}` : 'NDI not available';
+    restartDue.hidden = !sy?.restartNeeded;
+    restartDue.title = 'Some saved settings (NDI network) take effect after a restart';
+    updateReady.hidden = sy?.update?.status !== 'available';
+    updateReady.title = sy?.update?.latest ? `Version ${sy.update.latest} is available` : 'A new version is available';
+  };
+  on('state', renderPills);
+  on('system', renderPills);
+  on('settings', renderPills);
+
+  // Recording button: "Configure recording" ↔ red running pill with timer.
+  const recBtn = pill('record', 'Configure recording', '.rec-pill');
+  const recLabel = recBtn.querySelector('.pill-label') as HTMLElement;
   recBtn.addEventListener('click', () => openRecordingPopover(recBtn));
   const renderRec = () => {
     const recs = (store.state?.outputs ?? []).filter((o) => o.recording);
     recBtn.classList.toggle('running', recs.length > 0);
-    if (!recs.length) recLabel.textContent = 'Configure Recording';
+    if (!recs.length) recLabel.textContent = 'Configure recording';
   };
   on('state', renderRec);
   setInterval(() => {
@@ -58,31 +143,23 @@ function topBar(): HTMLElement {
     if (since) recLabel.innerHTML = `<span class="timer">${fmt(Date.now() - since)}</span>`;
   }, 500);
 
-  const settingsBtn = h('button.btn.pill', icon('gear'), 'Settings') as HTMLButtonElement;
+  const settingsBtn = pill('gear', 'Settings');
+  settingsBtn.title = 'Settings (Ctrl ,)';
   settingsBtn.addEventListener('click', () => void api.openWindow('settings'));
 
-  const avatar = h('div.avatar', { title: '' });
-  const renderAvatar = () => {
-    const name = store.settings.botName || '';
-    avatar.textContent = name ? name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase() : '';
-    avatar.title = name ? `Signed in as ${name}` : 'Not signed in';
-    avatar.style.background = name ? 'var(--blue)' : 'var(--control)';
-  };
-  avatar.addEventListener('click', () => {
-    const name = store.settings.botName;
-    const body = h('div', { style: 'display:flex;flex-direction:column;gap:10px;min-width:200px' },
-      h('div', { style: 'font-weight:600' }, name || 'Not signed in'),
-      h('div.caption', 'Google account used by the hidden Meet client'),
-      button(name ? 'Switch account…' : 'Sign in…', () => void api.signIn(), 'block'));
-    popover(avatar, body, { align: 'end' });
-  });
-  on('settings', renderAvatar);
-  renderAvatar();
-
+  renderCtx();
+  renderPills();
   return h('header.topbar',
-    h('div.left', h('span.app-title', 'Google Meet ISO')),
-    h('div.center', nav.el),
-    h('div.right', recBtn, settingsBtn, avatar));
+    h('div.topbar-left', h('span.app-title', 'Google Meet ISO')),
+    ctx,
+    h('div.topbar-right', h('div.pills', signInAgain, ndiWarn, restartDue, updateReady), recBtn, settingsBtn, windowButtons()));
+}
+
+/** Tab strip under the top bar. */
+function tabBar(): HTMLElement {
+  nav = segmented(TABS.map((t) => ({ value: t.id, label: t.label })), current, (v) => showTab(v as TabId));
+  nav.el.querySelectorAll('button').forEach((b, i) => b.setAttribute('title', `${TABS[i]?.label ?? ''} (Ctrl ${i + 1})`));
+  return h('nav.tabbar', nav.el);
 }
 
 /** Earliest start among running recordings (state carries only a flag; track locally). */
@@ -116,11 +193,9 @@ function camOpts(): { type: OptList; device: OptList } {
 }
 
 export function returnFeedBar(): HTMLElement {
-  const img = h('img', { alt: '' }) as HTMLImageElement;
+  const img = h('canvas') as HTMLCanvasElement;
   const msg = h('div.well-msg', 'No camera');
-  bindPreview('__botcam__', (url) => {
-    img.src = url;
-  });
+  bindPreviewCanvas('__botcam__', img);
   const preview = h('div.well.rf-preview', img, msg);
 
   const micBtn = h('button.rf-toggle', icon('mic'), 'Audio') as HTMLButtonElement;
@@ -165,7 +240,12 @@ export function returnFeedBar(): HTMLElement {
     micBtn.querySelector('.ico')!.innerHTML = icon(st?.micOn === false ? 'micSlash' : 'mic').innerHTML;
     camBtn.querySelector('.ico')!.innerHTML = icon(st?.camOn === false ? 'videoSlash' : 'video').innerHTML;
     const bc = st?.botCam;
-    msg.textContent = s.camera.type === 'none' ? 'No camera' : bc && bc.status !== 'live' ? bc.status : '';
+    const status = s.camera.type === 'none' ? 'No camera' : bc && bc.status !== 'live' ? bc.status : '';
+    const isErr = /^error/i.test(status);
+    // Errors read "error: …" from the camera source: show the reason, full text on hover.
+    msg.textContent = isErr ? status.replace(/^error:\s*/i, '') : status;
+    msg.title = status;
+    msg.classList.toggle('err', isErr);
     msg.hidden = !msg.textContent;
     if (s.camera.type === 'none') img.removeAttribute('src');
   };
@@ -179,15 +259,15 @@ export function returnFeedBar(): HTMLElement {
   const ram = h('span');
   const net = h('span');
   const outs = h('span');
-  const perfBtn = button('Open Performance Details', () => void api.openWindow('perf'), 'sm');
+  const perfBtn = button('Performance details', () => void api.openWindow('perf'), 'sm');
   const renderSys = () => {
     const sy = store.system;
     if (!sy) return;
-    cpu.textContent = `CPU: ${Math.round(sy.cpu)}%`;
-    ram.textContent = `RAM: ${(sy.memMB / 1024).toFixed(1)} GB`;
-    net.textContent = `Network in: ${(store.state?.rxMbps ?? 0).toFixed(0)}Mbps`;
+    cpu.textContent = `CPU ${Math.round(sy.cpu)}%`;
+    ram.textContent = `RAM ${(sy.memMB / 1024).toFixed(1)} GB`;
+    net.textContent = `Network in ${(store.state?.rxMbps ?? 0).toFixed(0)} Mb/s`;
     const live = (store.state?.outputs ?? []).filter((o) => o.status === 'live').length;
-    outs.textContent = `Outputs live: ${live}/${store.settings.outputs.filter((o) => o.enabled).length}`;
+    outs.textContent = `Outputs live ${live}/${store.settings.outputs.filter((o) => o.enabled).length}`;
   };
   on('system', renderSys);
   on('state', renderSys);
@@ -197,8 +277,8 @@ export function returnFeedBar(): HTMLElement {
 
   const bar = h('footer.bottombar',
     preview,
-    h('div.rf-title', h('h2', 'Return Feed'), h('div.rf-toggles', micBtn, camBtn)),
-    h('div.rf-fields', field(inputSource.el, 'Input Source'), field(camera.el, 'Camera'), field(mic.el, 'Microphone'), field(speaker.el, 'Speaker')),
+    h('div.rf-title', h('h2', 'Return feed'), h('div.rf-toggles', micBtn, camBtn)),
+    h('div.rf-fields', field(inputSource.el, 'Input source'), field(camera.el, 'Camera'), field(mic.el, 'Microphone'), field(speaker.el, 'Speaker')),
     h('div.rf-spacer'),
     h('div.rf-stats', h('div.col', cpu, ram), h('div.col', outs, net), perfBtn),
     h('div.rf-right', h('div.version', meetLink, h('span', __APP_VERSION__))));
@@ -216,7 +296,18 @@ export function buildShell(root: HTMLElement): void {
     hosts.set(t.id, host);
     tabhost.append(host);
   }
-  root.append(topBar(), tabhost, returnFeedBar());
+  root.append(topBar(), tabBar(), tabhost, returnFeedBar());
+  // Settings opens here as a dialog (menu, Ctrl+, and other windows route through main).
+  api.onOpenSettings?.((arg) => openSettingsDialog(arg));
+  // Ctrl+1…4: tabs.
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    const t = TABS[Number(e.key) - 1];
+    if (t && !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      showTab(t.id);
+    }
+  });
   // Start on Video once in a call, otherwise Meeting.
   showTab(inCall() ? 'video' : 'meeting');
 }

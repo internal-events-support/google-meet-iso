@@ -4,9 +4,11 @@
 //  - The NDI runtime is loaded dynamically (NDIlib_v6_load) from NDI_RUNTIME_DIR_V6,
 //    so we never link against the SDK import lib and work with the installed runtime.
 //  - Each Sender owns one NDI send instance plus a worker thread. JS hands frames in
-//    via sendVideo(); we memcpy into a pending slot (latest frame wins, older ones are
-//    dropped) and the worker does the actual (blocking, compressing) NDI send. This
-//    keeps the renderer's main thread free.
+//    via sendVideo() (we memcpy into a pending slot) or sendVideoOwned() (zero-copy: we keep
+//    a reference to the caller's ArrayBuffer and read it on the worker; it is handed back
+//    from a later sendVideoOwned()/reclaim() call once nothing uses it). Latest frame wins,
+//    older ones are dropped; the worker does the actual (blocking, compressing) NDI send.
+//    This keeps the renderer's main thread free.
 //  - If no frame arrives for `idleMs` the worker emits a black slate at ~5 fps so
 //    downstream switchers keep a stable source instead of a frozen last frame.
 //  - Cadence clock (setCadence(fpsN, fpsD)): the worker sends at exactly fpsN/fpsD on a
@@ -147,6 +149,12 @@ struct PreciseTimer {
 
 struct Frame {
   std::vector<uint8_t> data;
+  // Zero-copy frame (sendVideoOwned): bytes live in a JS ArrayBuffer kept alive by `ref`.
+  // Only the JS thread may create/delete `ref`; the worker just moves it to `released_`.
+  const uint8_t* ext = nullptr;
+  napi_ref ref = nullptr;
+  const uint8_t* ptr() const { return ext ? ext : data.data(); }
+  bool has() const { return ext != nullptr || !data.empty(); }
   int width = 0;
   int height = 0;
   int stride = 0;
@@ -158,6 +166,8 @@ class Sender : public Napi::ObjectWrap<Sender> {
   static Napi::Function Init(Napi::Env env) {
     return DefineClass(env, "Sender", {
       InstanceMethod("sendVideo", &Sender::SendVideo),
+      InstanceMethod("sendVideoOwned", &Sender::SendVideoOwned),
+      InstanceMethod("reclaim", &Sender::Reclaim),
       InstanceMethod("sendAudio", &Sender::SendAudio),
       InstanceMethod("setCadence", &Sender::SetCadence),
       InstanceMethod("connections", &Sender::Connections),
@@ -178,6 +188,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
       return;
     }
     name_ = info[0].As<Napi::String>().Utf8Value();
+    env_ = env;
     if (info.Length() > 1 && info[1].IsObject()) {
       auto o = info[1].As<Napi::Object>();
       if (o.Has("idleMs")) idleMs_ = o.Get("idleMs").As<Napi::Number>().Int32Value();
@@ -251,66 +262,151 @@ class Sender : public Napi::ObjectWrap<Sender> {
 
   // sendVideo(data: ArrayBuffer | TypedArray, width, height, format: 'I420'|'NV12'|'UYVY'|'UYVA'|'BGRA'|...,
   //           stride?: number, fpsN?: number, fpsD?: number)
+  struct VideoArgs {
+    const uint8_t* ptr = nullptr;
+    size_t need = 0;
+    int w = 0, h = 0, stride = 0;
+    NDIlib_FourCC_video_type_e fourcc = NDIlib_FourCC_video_type_UYVY;
+    bool hasFps = false;
+    int fpsN = 0, fpsD = 0;
+  };
+
+  // Validates (data, width, height, format, stride?, fpsN?, fpsD?). False (+ JS exception) on error.
+  bool ParseVideo(const Napi::CallbackInfo& info, VideoArgs* a) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 4) {
+      Napi::TypeError::New(env, "sendVideo(data, width, height, format, stride?)").ThrowAsJavaScriptException();
+      return false;
+    }
+    size_t len = 0;
+    if (info[0].IsArrayBuffer()) {
+      auto ab = info[0].As<Napi::ArrayBuffer>();
+      a->ptr = static_cast<const uint8_t*>(ab.Data());
+      len = ab.ByteLength();
+    } else if (info[0].IsTypedArray()) {
+      auto ta = info[0].As<Napi::TypedArray>();
+      auto ab = ta.ArrayBuffer();
+      a->ptr = static_cast<const uint8_t*>(ab.Data()) + ta.ByteOffset();
+      len = ta.ByteLength();
+    } else {
+      Napi::TypeError::New(env, "data must be ArrayBuffer or TypedArray").ThrowAsJavaScriptException();
+      return false;
+    }
+    a->w = info[1].As<Napi::Number>().Int32Value();
+    a->h = info[2].As<Napi::Number>().Int32Value();
+    std::string fmt = info[3].As<Napi::String>().Utf8Value();
+    int bn, bd;
+    if (!ParseFourCC(fmt, &a->fourcc, &bn, &bd)) {
+      Napi::TypeError::New(env, "unsupported format " + fmt).ThrowAsJavaScriptException();
+      return false;
+    }
+    (void)bn; (void)bd;
+    a->stride = (info.Length() > 4 && info[4].IsNumber()) ? info[4].As<Napi::Number>().Int32Value() : DefaultStride(a->fourcc, a->w);
+    a->need = FrameBytes(a->fourcc, a->w, a->h, a->stride);
+    if (a->w <= 0 || a->h <= 0 || len < a->need) {
+      Napi::RangeError::New(env, "buffer too small for frame").ThrowAsJavaScriptException();
+      return false;
+    }
+    if (info.Length() > 6 && info[5].IsNumber() && info[6].IsNumber()) {
+      a->hasFps = true;
+      a->fpsN = info[5].As<Napi::Number>().Int32Value();
+      a->fpsD = info[6].As<Napi::Number>().Int32Value();
+    }
+    return true;
+  }
+
+  // Under mu_: fill the pending slot's metadata (the caller sets the bytes).
+  void SetPendingMeta(const VideoArgs& a) {
+    if (hasPending_) dropped_++;
+    if (pending_.ref) {
+      released_.push_back(pending_.ref);
+      pending_.ref = nullptr;
+    }
+    pending_.ext = nullptr;
+    pending_.width = a.w;
+    pending_.height = a.h;
+    pending_.stride = a.stride;
+    pending_.fourcc = a.fourcc;
+    if (clockN_ == 0 && a.hasFps) {
+      fpsN_ = a.fpsN;
+      fpsD_ = a.fpsD;
+    }
+    hasPending_ = true;
+    received_++;
+  }
+
   // In clocked mode (setCadence) this only submits the frame; the worker sends it on the next tick.
   // For planar formats the buffer must be tightly packed planes (Y, then U, then V / UV)
   // with luma stride = `stride` (default: width) and chroma stride = stride/2 (I420) or stride (NV12).
   Napi::Value SendVideo(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (!send_) return Napi::Boolean::New(env, false);
-    if (info.Length() < 4) {
-      Napi::TypeError::New(env, "sendVideo(data, width, height, format, stride?)").ThrowAsJavaScriptException();
+    VideoArgs a;
+    if (!ParseVideo(info, &a)) return env.Undefined();
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      SetPendingMeta(a);
+      pending_.data.resize(a.need);
+      std::memcpy(pending_.data.data(), a.ptr, a.need);
+    }
+    cv_.notify_one();
+    return Napi::Boolean::New(env, true);
+  }
+
+  // sendVideoOwned(data: ArrayBuffer, ...same as sendVideo) → ArrayBuffer[] (buffers released since the
+  // last call). Zero-copy: the caller must not write to `data` until it comes back in such a list.
+  Napi::Value SendVideoOwned(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!send_ || info.Length() < 1 || !info[0].IsArrayBuffer()) {
+      Napi::TypeError::New(env, "sendVideoOwned(data: ArrayBuffer, width, height, format, stride?)").ThrowAsJavaScriptException();
       return env.Undefined();
     }
-    const uint8_t* ptr = nullptr;
-    size_t len = 0;
-    if (info[0].IsArrayBuffer()) {
-      auto ab = info[0].As<Napi::ArrayBuffer>();
-      ptr = static_cast<const uint8_t*>(ab.Data());
-      len = ab.ByteLength();
-    } else if (info[0].IsTypedArray()) {
-      auto ta = info[0].As<Napi::TypedArray>();
-      auto ab = ta.ArrayBuffer();
-      ptr = static_cast<const uint8_t*>(ab.Data()) + ta.ByteOffset();
-      len = ta.ByteLength();
-    } else {
-      Napi::TypeError::New(env, "data must be ArrayBuffer or TypedArray").ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-    int w = info[1].As<Napi::Number>().Int32Value();
-    int h = info[2].As<Napi::Number>().Int32Value();
-    std::string fmt = info[3].As<Napi::String>().Utf8Value();
-    NDIlib_FourCC_video_type_e fourcc;
-    int bn, bd;
-    if (!ParseFourCC(fmt, &fourcc, &bn, &bd)) {
-      Napi::TypeError::New(env, "unsupported format " + fmt).ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-    (void)bn; (void)bd;
-    int stride = (info.Length() > 4 && info[4].IsNumber()) ? info[4].As<Napi::Number>().Int32Value()
-                                                          : DefaultStride(fourcc, w);
-    size_t need = FrameBytes(fourcc, w, h, stride);
-    if (w <= 0 || h <= 0 || len < need) {
-      Napi::RangeError::New(env, "buffer too small for frame").ThrowAsJavaScriptException();
+    VideoArgs a;
+    if (!ParseVideo(info, &a)) return env.Undefined();
+    napi_ref ref = nullptr;
+    if (napi_create_reference(env, info[0], 1, &ref) != napi_ok) {
+      Napi::Error::New(env, "napi_create_reference failed").ThrowAsJavaScriptException();
       return env.Undefined();
     }
     {
       std::lock_guard<std::mutex> lk(mu_);
-      if (hasPending_) dropped_++;
-      pending_.data.resize(need);
-      std::memcpy(pending_.data.data(), ptr, need);
-      pending_.width = w;
-      pending_.height = h;
-      pending_.stride = stride;
-      pending_.fourcc = fourcc;
-      if (clockN_ == 0 && info.Length() > 6 && info[5].IsNumber() && info[6].IsNumber()) {
-        fpsN_ = info[5].As<Napi::Number>().Int32Value();
-        fpsD_ = info[6].As<Napi::Number>().Int32Value();
-      }
-      hasPending_ = true;
-      received_++;
+      SetPendingMeta(a);
+      pending_.ext = a.ptr;
+      pending_.ref = ref;
     }
     cv_.notify_one();
-    return Napi::Boolean::New(env, true);
+    return TakeReleased(env);
+  }
+
+  // reclaim() → ArrayBuffer[]: owned buffers the worker no longer needs.
+  Napi::Value Reclaim(const Napi::CallbackInfo& info) { return TakeReleased(info.Env()); }
+
+  Napi::Value TakeReleased(Napi::Env env) {
+    std::vector<napi_ref> refs;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      refs.swap(released_);
+    }
+    auto arr = Napi::Array::New(env, refs.size());
+    uint32_t i = 0;
+    for (napi_ref r : refs) {
+      napi_value v = nullptr;
+      if (napi_get_reference_value(env, r, &v) == napi_ok && v) arr.Set(i++, Napi::Value(env, v));
+      napi_delete_reference(env, r);
+    }
+    return arr;
+  }
+
+  // JS thread only (after the worker has stopped): drop every reference we still hold.
+  void DeleteRefs() {
+    if (!env_) return;
+    for (Frame* f : {&pending_, &current_}) {
+      if (f->ref) napi_delete_reference(env_, f->ref);
+      f->ref = nullptr;
+      f->ext = nullptr;
+    }
+    for (napi_ref r : released_) napi_delete_reference(env_, r);
+    released_.clear();
   }
 
   Napi::Value Connections(const Napi::CallbackInfo& info) {
@@ -349,6 +445,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
       cv_.notify_all();
       if (worker_.joinable()) worker_.join();
     }
+    DeleteRefs();
     if (send_) {
       g_ndi->send_destroy(send_);
       send_ = nullptr;
@@ -389,6 +486,7 @@ class Sender : public Napi::ObjectWrap<Sender> {
     steady_clock::time_point start;
     int64_t tick = 0;
     bool haveCur = false;
+    (void)haveCur;
     while (running_) {
       {
         std::unique_lock<std::mutex> lk(mu_);
@@ -402,13 +500,18 @@ class Sender : public Napi::ObjectWrap<Sender> {
         }
         if (hasPending_) {
           std::swap(current_, pending_);
+          // The previous current is no longer sent: hand its JS buffer back.
+          if (pending_.ref) released_.push_back(pending_.ref);
+          pending_.ref = nullptr;
+          pending_.ext = nullptr;
           hasPending_ = false;
-          haveCur = true;
           sentNew_ = true;
         }
+        // Repeat the last frame sent before the clock started too (e.g. freeze on video loss).
+        haveCur = current_.has();
       }
-      if (haveCur && !current_.data.empty()) {
-        Emit(current_.data.data(), current_.width, current_.height, current_.stride, current_.fourcc);
+      if (haveCur) {
+        Emit(current_.ptr(), current_.width, current_.height, current_.stride, current_.fourcc);
         lastW_ = current_.width;
         lastH_ = current_.height;
         slating_ = false;
@@ -461,12 +564,18 @@ class Sender : public Napi::ObjectWrap<Sender> {
       }
       auto now = steady_clock::now();
       if (have) {
-        Emit(work.data.data(), work.width, work.height, work.stride, work.fourcc);
+        Emit(work.ptr(), work.width, work.height, work.stride, work.fourcc);
         lastFrameAt_ = now;
         lastW_ = work.width;
         lastH_ = work.height;
         slating_ = false;
         sent_++;
+        // Keep the last sent frame as `current_` so a later setCadence() can repeat it.
+        std::lock_guard<std::mutex> lk(mu_);
+        if (current_.ref) released_.push_back(current_.ref);
+        current_.ref = nullptr;
+        current_.ext = nullptr;
+        std::swap(current_, work);
       } else if (idleMs_ > 0 && now - lastFrameAt_ > milliseconds(idleMs_) && now - lastSlate > milliseconds(200)) {
         Emit(slate_.data(), slateW_, slateH_, slateW_ * 2, NDIlib_FourCC_video_type_UYVY);
         lastSlate = now;
@@ -478,6 +587,8 @@ class Sender : public Napi::ObjectWrap<Sender> {
   std::string name_;
   std::string groups_;
   NDIlib_send_instance_t send_ = nullptr;
+  napi_env env_ = nullptr;
+  std::vector<napi_ref> released_;  // guarded by mu_
   int idleMs_ = 1000;  // <= 0 disables the automatic black slate (JS renders loss modes)
   std::atomic<int> fpsN_{0}, fpsD_{0};
   int slateW_ = 1280;
@@ -623,12 +734,15 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
   static Napi::Function Init(Napi::Env env) {
     return DefineClass(env, "Receiver", {
       InstanceMethod("read", &Receiver::Read),
+      InstanceMethod("readInto", &Receiver::ReadInto),
       InstanceMethod("stats", &Receiver::Stats),
       InstanceMethod("setTally", &Receiver::SetTally),
       InstanceMethod("destroy", &Receiver::Destroy),
     });
   }
-  // new Receiver(fullSourceName, { lowBandwidth?: boolean })
+  // new Receiver(fullSourceName, { lowBandwidth?: boolean, format?: 'BGRA' | 'UYVY' })
+  //  format 'UYVY': frames without alpha arrive as UYVY (half the bytes of BGRA, no colour
+  //  conversion in NDI); frames with alpha still arrive as BGRA.
   explicit Receiver(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Receiver>(info) {
     Napi::Env env = info.Env();
     if (!LoadNdi()) { Napi::Error::New(env, g_loadError).ThrowAsJavaScriptException(); return; }
@@ -638,15 +752,17 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
     }
     name_ = info[0].As<Napi::String>().Utf8Value();
     bool low = false;
+    bool uyvy = false;
     if (info.Length() > 1 && info[1].IsObject()) {
       auto o = info[1].As<Napi::Object>();
       if (o.Has("lowBandwidth")) low = o.Get("lowBandwidth").ToBoolean();
+      if (o.Has("format") && o.Get("format").IsString()) uyvy = o.Get("format").As<Napi::String>().Utf8Value() == "UYVY";
     }
     NDIlib_source_t src{};
     src.p_ndi_name = name_.c_str();
     NDIlib_recv_create_v3_t rc{};
     rc.source_to_connect_to = src;
-    rc.color_format = NDIlib_recv_color_format_BGRX_BGRA;
+    rc.color_format = uyvy ? NDIlib_recv_color_format_UYVY_BGRA : NDIlib_recv_color_format_BGRX_BGRA;
     rc.bandwidth = low ? NDIlib_recv_bandwidth_lowest : NDIlib_recv_bandwidth_highest;
     rc.allow_video_fields = false;
     rc.p_ndi_recv_name = "Google Meet ISO camera input";
@@ -658,42 +774,97 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
   ~Receiver() override { Shutdown(); }
 
  private:
+  // The worker keeps only the newest NDI frame (no copy); readers copy straight out of it.
   void Run() {
     while (running_) {
       NDIlib_video_frame_v2_t v{};
       auto t = g_ndi->recv_capture_v2(recv_, &v, nullptr, nullptr, 100);
       if (t != NDIlib_frame_type_video) continue;
+      NDIlib_video_frame_v2_t old{};
+      bool hadOld = false;
       {
         std::lock_guard<std::mutex> lk(mu_);
-        const size_t rowBytes = static_cast<size_t>(v.xres) * 4;
-        buf_.resize(rowBytes * v.yres);
-        for (int y = 0; y < v.yres; y++)
-          std::memcpy(buf_.data() + rowBytes * y, v.p_data + static_cast<size_t>(v.line_stride_in_bytes) * y, rowBytes);
+        if (held_) {
+          old = frame_;
+          hadOld = true;
+        }
+        frame_ = v;
+        held_ = true;
         w_ = v.xres;
         h_ = v.yres;
-        bgrx_ = v.FourCC == NDIlib_FourCC_video_type_BGRX;
         seq_++;
       }
-      g_ndi->recv_free_video_v2(recv_, &v);
+      if (hadOld) g_ndi->recv_free_video_v2(recv_, &old);
     }
   }
-  // read(): { width, height, format: 'BGRA'|'BGRX', data: ArrayBuffer } | null
+
+  static const char* FormatName(NDIlib_FourCC_video_type_e f) {
+    switch (f) {
+      case NDIlib_FourCC_video_type_UYVY: return "UYVY";
+      case NDIlib_FourCC_video_type_BGRX: return "BGRX";
+      default: return "BGRA";
+    }
+  }
+  static int Bpp(NDIlib_FourCC_video_type_e f) { return f == NDIlib_FourCC_video_type_UYVY ? 2 : 4; }
+
+  // Under mu_: copy the held frame's rows into dst (tightly packed).
+  void CopyRows(uint8_t* dst) {
+    const size_t row = static_cast<size_t>(frame_.xres) * Bpp(frame_.FourCC);
+    const size_t stride = static_cast<size_t>(frame_.line_stride_in_bytes);
+    if (stride == row) {
+      std::memcpy(dst, frame_.p_data, row * frame_.yres);
+      return;
+    }
+    for (int y = 0; y < frame_.yres; y++) std::memcpy(dst + row * y, frame_.p_data + stride * y, row);
+  }
+
+  // read(): { width, height, format, data: ArrayBuffer } | null — allocates per call; prefer readInto().
   Napi::Value Read(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     std::lock_guard<std::mutex> lk(mu_);
-    if (seq_ == readSeq_ || buf_.empty()) return env.Null();
+    if (!held_ || seq_ == readSeq_) return env.Null();
     readSeq_ = seq_;
-    auto ab = Napi::ArrayBuffer::New(env, buf_.size());
-    std::memcpy(ab.Data(), buf_.data(), buf_.size());
+    const size_t bytes = static_cast<size_t>(frame_.xres) * Bpp(frame_.FourCC) * frame_.yres;
+    auto ab = Napi::ArrayBuffer::New(env, bytes);
+    CopyRows(static_cast<uint8_t*>(ab.Data()));
     auto o = Napi::Object::New(env);
-    o.Set("width", w_);
-    o.Set("height", h_);
-    o.Set("format", bgrx_ ? "BGRX" : "BGRA");
+    o.Set("width", frame_.xres);
+    o.Set("height", frame_.yres);
+    o.Set("format", FormatName(frame_.FourCC));
     o.Set("data", ab);
     return o;
   }
+
+  // readInto(buf: ArrayBuffer): null when there is no new frame; else { width, height, format,
+  // bytes }. bytes = 0 means `buf` is too small (needed size in `needed`; the frame stays unread).
+  Napi::Value ReadInto(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsArrayBuffer()) {
+      Napi::TypeError::New(env, "readInto(buf: ArrayBuffer)").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    auto ab = info[0].As<Napi::ArrayBuffer>();
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!held_ || seq_ == readSeq_) return env.Null();
+    const size_t bytes = static_cast<size_t>(frame_.xres) * Bpp(frame_.FourCC) * frame_.yres;
+    auto o = Napi::Object::New(env);
+    o.Set("width", frame_.xres);
+    o.Set("height", frame_.yres);
+    o.Set("format", FormatName(frame_.FourCC));
+    if (ab.ByteLength() < bytes) {
+      o.Set("bytes", 0);
+      o.Set("needed", static_cast<double>(bytes));
+      return o;
+    }
+    readSeq_ = seq_;
+    CopyRows(static_cast<uint8_t*>(ab.Data()));
+    o.Set("bytes", static_cast<double>(bytes));
+    return o;
+  }
+
   Napi::Value Stats(const Napi::CallbackInfo& info) {
     auto o = Napi::Object::New(info.Env());
+    std::lock_guard<std::mutex> lk(mu_);
     o.Set("name", name_);
     o.Set("frames", static_cast<double>(seq_));
     o.Set("width", w_);
@@ -716,16 +887,21 @@ class Receiver : public Napi::ObjectWrap<Receiver> {
   }
   void Shutdown() {
     if (running_.exchange(false) && worker_.joinable()) worker_.join();
-    if (recv_) { g_ndi->recv_destroy(recv_); recv_ = nullptr; }
+    if (recv_) {
+      if (held_) g_ndi->recv_free_video_v2(recv_, &frame_);
+      held_ = false;
+      g_ndi->recv_destroy(recv_);
+      recv_ = nullptr;
+    }
   }
   std::string name_;
   NDIlib_recv_instance_t recv_ = nullptr;
   std::thread worker_;
   std::atomic<bool> running_{false};
   std::mutex mu_;
-  std::vector<uint8_t> buf_;
+  NDIlib_video_frame_v2_t frame_{};  // newest frame, owned until replaced (guarded by mu_)
+  bool held_ = false;
   int w_ = 0, h_ = 0;
-  bool bgrx_ = false;
   uint64_t seq_ = 0, readSeq_ = 0;
 };
 

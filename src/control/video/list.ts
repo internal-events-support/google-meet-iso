@@ -12,7 +12,7 @@ import {
 import { previewWell, recordingBadge, setTally, type OutputView } from './grid';
 
 export const LIST_COLUMNS = [
-  'Enabled', 'Index', 'Rec', 'Output Name', 'Mode', 'Selection', 'Participant Controls', 'Output Device',
+  'Enabled', 'Index', 'Rec', 'Output name', 'Mode', 'Selection', 'Participant controls', 'Output device',
   'Format', 'Audio', 'Status', 'Preview', 'Meters', 'Options',
 ];
 
@@ -37,7 +37,7 @@ function openVideoPreview(anchor: HTMLElement, id: string): void {
 export function listRow(cfg0: OutputConfig, index: number): OutputView & { setIndex(i: number): void } {
   const id = cfg0.id;
   const cfg = () => cfgById(id);
-  const enabled = toggle(cfg0.enabled, (v) => void updateOutput(id, { enabled: v }), { cls: 'sm', title: 'Video Output is enabled' });
+  const enabled = toggle(cfg0.enabled, (v) => void updateOutput(id, { enabled: v }), { cls: 'sm', title: 'Video output is enabled' });
   const idx = h('span.vo-idx', String(index + 1));
   const rec = recordingBadge();
   const name = textField(cfg0.name, (v) => {
@@ -45,7 +45,7 @@ export function listRow(cfg0: OutputConfig, index: number): OutputView & { setIn
     if (n) void updateOutput(id, { name: n });
     else name.set(cfg()?.name ?? '');
   }, { cls: 'vo-name-field' });
-  name.el.title = 'Output Name';
+  name.el.title = 'Output name';
   const modeIco = icon(MODE_ICON[cfg0.mode] ?? 'person', 'vo-mode-ico');
   const mode = popup(MODE_OPTS, cfg0.mode, (v) => {
     const c = cfg();
@@ -60,17 +60,17 @@ export function listRow(cfg0: OutputConfig, index: number): OutputView & { setIn
   const device = popup([], 'ndi', (v) => {
     const c = cfg();
     if (c) setDevice(c, v);
-  }, { cls: 'sm', title: 'Output Device' });
+  }, { cls: 'sm', title: 'Output device' });
   const format = popup(FORMAT_OPTS, formatValue(cfg0), (v) => {
     const c = cfg();
     if (c) setFormat(c, v);
   }, { cls: 'sm', title: 'Format' });
-  const audio = popup(AUDIO_OPTS, cfg0.audio, (v) => void updateOutput(id, { audio: v as OutputConfig['audio'] }), { cls: 'sm', title: 'Embedded Audio' });
+  const audio = popup(AUDIO_OPTS, cfg0.audio, (v) => void updateOutput(id, { audio: v as OutputConfig['audio'] }), { cls: 'sm', title: 'Embedded audio' });
   const status = statusLine();
-  const prevBtn = iconButton('preview', () => openVideoPreview(prevBtn, id), 'Open Video Preview', 'plain vo-prev-btn');
+  const prevBtn = iconButton('preview', () => openVideoPreview(prevBtn, id), 'Open video preview', 'plain vo-prev-btn');
   const meterL = meterH();
   const meterR = meterH();
-  const fx = iconButton('sliders', () => openEffects(id), 'Output Effects', 'vo-fx');
+  const fx = iconButton('sliders', () => openEffects(id), 'Output effects', 'vo-fx');
   const more = iconButton('ellipsis', () => outputMenu(more, cfg), 'Options', 'plain vo-more');
 
   const td = (cls: string, ...c: (Node | null)[]) => h(`td.${cls}`, ...c);
@@ -128,7 +128,7 @@ export function listShell() {
   const table = h('table.table.vo-table',
     h('thead', h('tr', ...LIST_COLUMNS.map((c) => h('th', c)))),
     tbody);
-  const add = h('button.btn.sm.vo-add-row', { title: 'Add Output' }, icon('plus'), 'Add Output');
+  const add = h('button.btn.sm.vo-add-row', { title: 'Add output' }, icon('plus'), 'Add output');
   add.addEventListener('click', addOutput);
   const el = h('div.vo-list', h('div.vo-table-wrap', table), h('div.vo-list-foot', add));
   return { el, tbody };

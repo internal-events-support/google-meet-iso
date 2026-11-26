@@ -106,19 +106,13 @@ function joinView() {
   const recent = h('div.mt-recent', h('div.mt-label', 'Recent meetings'), recentList);
   let recentKey = '';
 
-  const account = h('span.mt-account-name');
-  const switchBtn = button('Switch account', () => void api.signIn(), 'sm');
-  const accountRow = h('div.mt-account', icon('person'), account, switchBtn);
-
   const card = h('div.mt-join-card.card',
     h('div.mt-brand', h('img.mt-logo', { src: 'icon.png', alt: '' }), h('div', h('div.mt-brand-name', 'Google Meet ISO'), h('div.mt-brand-sub', 'Isolated broadcast outputs from Google Meet'))),
     status,
     h('div.mt-join-row', link, joinBtn),
     err,
     newBtn,
-    recent,
-    h('div.mt-sep'),
-    accountRow);
+    recent);
   const el = h('div.mt-join', card);
 
   function render() {
@@ -132,8 +126,6 @@ function joinView() {
     status.textContent = p.text;
     status.className = `mt-status ${p.cls}`;
     status.hidden = !p.text;
-    account.textContent = s.botName || 'Google account';
-    account.title = s.botName;
 
     const urls = s.recentMeetUrls ?? [];
     const key = urls.join('|') + (joining ? '1' : '0');

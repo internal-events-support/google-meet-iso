@@ -57,6 +57,13 @@ export class AutoCropTracker {
     return !!this.det;
   }
 
+  /** The eased view hasn't reached its target yet (worth re-rendering between source frames). */
+  get moving(): boolean {
+    const v = this.view;
+    const t = this.target;
+    return Math.abs(v.cx - t.cx) > 5e-4 || Math.abs(v.cy - t.cy) > 5e-4 || Math.abs(v.zoom - t.zoom) > 1e-3;
+  }
+
   /** Feed a source frame; returns the current eased view (source fractions). */
   update(frame: VideoFrame | ImageBitmap | HTMLImageElement | HTMLCanvasElement, sw: number, sh: number, outAspect: number, cfg: Partial<OutputConfig>): AutoCropView {
     const r = RESP[cfg.autoCropResponsiveness ?? 'medium'];

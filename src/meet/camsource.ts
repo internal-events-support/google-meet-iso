@@ -9,6 +9,8 @@ const OUT_H = 720;
 
 interface NdiReceiver {
   read(): { width: number; height: number; format: 'BGRA' | 'BGRX'; data: ArrayBuffer } | null;
+  /** Copy the newest frame into `buf` (reused: no per-frame allocation). bytes = 0: buf too small. */
+  readInto?(buf: ArrayBuffer): { width: number; height: number; format: 'BGRA' | 'BGRX'; bytes: number; needed?: number } | null;
   stats(): { connected: boolean; frames: number; width: number; height: number };
   destroy(): void;
 }
@@ -41,6 +43,8 @@ function drawFit(ctx: CanvasRenderingContext2D, src: CanvasImageSource, sw: numb
 export class BotCamera {
   private source: CameraSource = { type: 'none', name: '' };
   private receiver: NdiReceiver | null = null;
+  /** Reused NDI receive buffer. */
+  private rxBuf: ArrayBuffer | null = null;
   private webcamStream: MediaStream | null = null;
   private webcamVideo: HTMLVideoElement | null = null;
   private timer: number;
@@ -49,6 +53,8 @@ export class BotCamera {
   private token = 0;
   private fpsTimes: number[] = [];
   status = 'off';
+  /** Bumped whenever the camera canvas is repainted (new frame or slate): previews skip unchanged content. */
+  paints = 0;
   width = 0;
   height = 0;
 
@@ -117,6 +123,19 @@ export class BotCamera {
     this.webcamVideo = null;
   }
 
+  /** Newest NDI frame: into the reused buffer when the addon supports it. */
+  private readFrame(rx: NdiReceiver): { width: number; height: number; format: 'BGRA' | 'BGRX'; data: ArrayBuffer | Uint8Array } | null {
+    if (typeof rx.readInto !== 'function') return rx.read();
+    this.rxBuf ??= new ArrayBuffer(1920 * 1080 * 4);
+    let f = rx.readInto(this.rxBuf);
+    if (f && !f.bytes && f.needed) {
+      this.rxBuf = new ArrayBuffer(f.needed);
+      f = rx.readInto(this.rxBuf);
+    }
+    if (!f || !f.bytes) return null;
+    return { width: f.width, height: f.height, format: f.format, data: new Uint8Array(this.rxBuf, 0, f.bytes) };
+  }
+
   private paint(): void {
     const canvas = getCamCanvas();
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -124,7 +143,7 @@ export class BotCamera {
     const now = performance.now();
     let drew = false;
     if (this.receiver) {
-      const f = this.receiver.read();
+      const f = this.readFrame(this.receiver);
       if (f) {
         const vf = new VideoFrame(f.data, { format: f.format, codedWidth: f.width, codedHeight: f.height, timestamp: Math.round(now * 1000) });
         drawFit(ctx, vf, f.width, f.height);
@@ -143,12 +162,14 @@ export class BotCamera {
       this.height = v.videoHeight;
       drew = true;
     }
+    if (drew) this.paints++;
     if (drew) {
       this.lastFrameAt = now;
       this.fpsTimes.push(now);
     } else if (now - this.lastFrameAt > 1000 && now - this.lastSlateAt > 500) {
       // Keep the track alive with a slate so Meet doesn't treat it as frozen.
       this.lastSlateAt = now;
+      this.paints++;
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, OUT_W, OUT_H);
       ctx.fillStyle = '#666';
@@ -170,34 +191,4 @@ export class BotCamera {
   }
 }
 
-/** Downscaled JPEG thumbnails for the control UI. */
-export class Thumbnailer {
-  private canvas = new OffscreenCanvas(320, 180);
-  private ctx = this.canvas.getContext('2d', { alpha: false })!;
-  private busy = false;
-  private last = 0;
-
-  constructor(private width = 320) {}
-
-  /** Returns a JPEG if the rate limit allows, else null. */
-  async maybe(src: CanvasImageSource | VideoFrame, sw: number, sh: number, fps: number): Promise<ArrayBuffer | null> {
-    const now = performance.now();
-    if (this.busy || now - this.last < 1000 / Math.max(1, fps) || !sw || !sh) return null;
-    this.busy = true;
-    this.last = now;
-    try {
-      const h = Math.max(2, Math.round((this.width * sh) / sw));
-      if (this.canvas.width !== this.width || this.canvas.height !== h) {
-        this.canvas.width = this.width;
-        this.canvas.height = h;
-      }
-      this.ctx.drawImage(src as CanvasImageSource, 0, 0, this.width, h);
-      const blob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
-      return await blob.arrayBuffer();
-    } catch {
-      return null;
-    } finally {
-      this.busy = false;
-    }
-  }
-}
+export { Thumbnailer } from './thumbs';

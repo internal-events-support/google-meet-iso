@@ -217,28 +217,26 @@ void main() {
 
 type Canvas = OffscreenCanvas | HTMLCanvasElement;
 
-/** WebGL2 ProcAmp renderer. `render()` draws into `canvas`; callers drawImage() it into their 2D compositor. */
-export class FxRenderer {
-  readonly canvas: Canvas;
-  private gl: WebGL2RenderingContext | null = null;
-  private prog: WebGLProgram | null = null;
-  private tex: WebGLTexture | null = null;
-  private lut: WebGLTexture | null = null;
+export interface FxRenderOpts {
+  color?: boolean;
+  geometry?: FxGeometry;
+  auto?: AutoCropView | null;
+}
+
+/**
+ * The ProcAmp program inside an existing WebGL2 context. `render()` draws into whatever
+ * framebuffer is bound (viewport 0,0,W,H), bottom-up like the default framebuffer, so one
+ * context can be shared by many outputs (see src/meet/compositor.ts).
+ */
+export class FxProgram {
+  private prog: WebGLProgram;
+  private vao: WebGLVertexArrayObject;
+  private tex: WebGLTexture;
+  private lut: WebGLTexture;
   private lutKey = '';
   private loc = new Map<string, WebGLUniformLocation | null>();
-  failed = false;
 
-  constructor(canvas?: Canvas) {
-    this.canvas = canvas ?? (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(16, 16) : document.createElement('canvas'));
-    this.init();
-  }
-
-  private init(): void {
-    const gl = this.canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: true }) as WebGL2RenderingContext | null;
-    if (!gl) {
-      this.failed = true;
-      return;
-    }
+  constructor(private gl: WebGL2RenderingContext) {
     const sh = (type: number, src: string) => {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
@@ -246,75 +244,58 @@ export class FxRenderer {
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
       return s;
     };
-    try {
-      const p = gl.createProgram()!;
-      gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
-      gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
-      gl.useProgram(p);
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      const a = gl.getAttribLocation(p, 'aPos');
-      gl.enableVertexAttribArray(a);
-      gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
-      const mk = (unit: number) => {
-        const t = gl.createTexture()!;
-        gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        return t;
-      };
-      this.tex = mk(0);
-      this.lut = mk(1);
-      gl.uniform1i(gl.getUniformLocation(p, 'uTex'), 0);
-      gl.uniform1i(gl.getUniformLocation(p, 'uLut'), 1);
-      this.gl = gl;
-      this.prog = p;
-      if ('addEventListener' in this.canvas) {
-        (this.canvas as HTMLCanvasElement).addEventListener('webglcontextlost', () => {
-          this.gl = null;
-          this.failed = true;
-        });
-      }
-    } catch (err) {
-      console.error('FxRenderer init failed', err);
-      this.failed = true;
-    }
+    const p = gl.createProgram()!;
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+    this.prog = p;
+    this.vao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.vao);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const a = gl.getAttribLocation(p, 'aPos');
+    gl.enableVertexAttribArray(a);
+    gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    const mk = () => {
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    this.tex = mk();
+    this.lut = mk();
+    gl.useProgram(p);
+    gl.uniform1i(gl.getUniformLocation(p, 'uTex'), 0);
+    gl.uniform1i(gl.getUniformLocation(p, 'uLut'), 1);
   }
 
   private u(name: string): WebGLUniformLocation | null {
-    if (!this.loc.has(name)) this.loc.set(name, this.gl!.getUniformLocation(this.prog!, name));
+    if (!this.loc.has(name)) this.loc.set(name, this.gl.getUniformLocation(this.prog, name));
     return this.loc.get(name)!;
   }
 
-  /**
-   * Render `src` (sw×sh) into the W×H canvas.
-   * `color=false` skips the colour pipeline (bypass); `geometry` overrides the transform (e.g. full view).
-   */
-  render(src: FxSource, sw: number, sh: number, W: number, H: number, eIn: Partial<OutputEffects>, opts: { color?: boolean; geometry?: FxGeometry; auto?: AutoCropView | null } = {}): boolean {
+  /** Upload `src` (sw×sh) and draw it with the effects into the bound framebuffer (W×H). */
+  render(src: FxSource, sw: number, sh: number, W: number, H: number, eIn: Partial<OutputEffects>, opts: FxRenderOpts = {}): boolean {
     const gl = this.gl;
-    if (!gl || this.failed || gl.isContextLost()) {
-      this.failed = true;
-      return false;
-    }
     const e = fullEffects(eIn);
-    if (this.canvas.width !== W || this.canvas.height !== H) {
-      this.canvas.width = W;
-      this.canvas.height = H;
-    }
     gl.viewport(0, 0, W, H);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     try {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-    } catch (err) {
+    } catch {
+      gl.bindVertexArray(null);
       return false;
     }
     const g = opts.geometry ?? fxGeometry(e, sw, sh, W, H, opts.auto);
@@ -347,18 +328,68 @@ export class FxRenderer {
     const ident = isIdentityCurve(e.toneCurve);
     gl.uniform1f(this.u('uUseLut'), ident ? 0 : 1);
     if (!ident) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.lut);
       const key = JSON.stringify(e.toneCurve);
       if (key !== this.lutKey) {
         this.lutKey = key;
         const l = toneLut(e.toneCurve);
         const rgba = new Uint8Array(256 * 4);
         for (let i = 0; i < 256; i++) rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = l[i];
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.lut);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
       }
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
     return true;
+  }
+}
+
+/** WebGL2 ProcAmp renderer with its own canvas (Output Effects preview). `render()` draws into `canvas`. */
+export class FxRenderer {
+  readonly canvas: Canvas;
+  private gl: WebGL2RenderingContext | null = null;
+  private prog: FxProgram | null = null;
+  failed = false;
+
+  constructor(canvas?: Canvas) {
+    this.canvas = canvas ?? (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(16, 16) : document.createElement('canvas'));
+    const gl = this.canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: true }) as WebGL2RenderingContext | null;
+    if (!gl) {
+      this.failed = true;
+      return;
+    }
+    try {
+      this.prog = new FxProgram(gl);
+      this.gl = gl;
+      if ('addEventListener' in this.canvas) {
+        (this.canvas as HTMLCanvasElement).addEventListener('webglcontextlost', () => {
+          this.gl = null;
+          this.failed = true;
+        });
+      }
+    } catch (err) {
+      console.error('FxRenderer init failed', err);
+      this.failed = true;
+    }
+  }
+
+  /**
+   * Render `src` (sw×sh) into the W×H canvas.
+   * `color=false` skips the colour pipeline (bypass); `geometry` overrides the transform (e.g. full view).
+   */
+  render(src: FxSource, sw: number, sh: number, W: number, H: number, eIn: Partial<OutputEffects>, opts: FxRenderOpts = {}): boolean {
+    const gl = this.gl;
+    if (!gl || !this.prog || this.failed || gl.isContextLost()) {
+      this.failed = true;
+      return false;
+    }
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width = W;
+      this.canvas.height = H;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return this.prog.render(src, sw, sh, W, H, eIn, opts);
   }
 }
